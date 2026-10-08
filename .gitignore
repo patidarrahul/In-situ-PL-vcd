@@ -1,0 +1,23 @@
+# Local environment
+.venv/
+venv/
+env/
+.mplcache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+
+# Recorded runs, spectra and plots — lab data stays on the machine
+data/*
+!data/.gitkeep
+*.csv
+*.npz
+*.npz.tmp
+*.png
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
