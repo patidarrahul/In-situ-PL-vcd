@@ -2,18 +2,28 @@
 
 from __future__ import annotations
 
+import math
 import unittest
 
 from gauge import (
     NAPG200,
+    SIM_ATMOSPHERE_PA,
+    SIM_BASE_HOLD_S,
+    SIM_BASE_PA,
+    SIM_CYCLE_S,
+    SIM_HOLD_S,
+    SIM_PUMP_S,
     GaugeError,
+    SimulatedLink,
     decode_status,
     open_link,
     parse_pressure_payload,
     preferred_serial_port,
+    simulated_pressure_pa,
     status_flags,
     usable_serial_port,
 )
+from trigger import DropDetector, RecoveryWatcher, TriggerConfig
 
 
 class FakeLink:
@@ -121,6 +131,83 @@ class TestNAPG200(unittest.TestCase):
         g = NAPG200(FakeLink([]))
         with self.assertRaises(GaugeError):
             g.set_units("psi")
+
+
+class TestSimulatedLink(unittest.TestCase):
+    def _gauge(self, now: dict) -> NAPG200:
+        return NAPG200(SimulatedLink(clock=lambda: now["t"]))
+
+    def test_open_link(self):
+        link = open_link("simulated")
+        self.assertIsInstance(link, SimulatedLink)
+        link.close()
+        self.assertTrue(link.closed)
+
+    def test_identity_and_atmosphere(self):
+        now = {"t": 0.0}
+        gauge = self._gauge(now)
+        self.assertIn("simulated", gauge.identity().lower())
+        self.assertEqual(gauge.serial_number(), "SIMULATED")
+        gauge.set_units("Pa")
+        pressure, status = gauge.read_pressure()
+        self.assertEqual(status["units"], "Pa")
+        self.assertEqual(status["gas"], "N2/air")
+        self.assertAlmostEqual(pressure, SIM_ATMOSPHERE_PA, delta=0.02 * SIM_ATMOSPHERE_PA)
+
+    def test_units_rescale_the_same_chamber(self):
+        now = {"t": 50.0}
+        gauge = self._gauge(now)
+        gauge.set_units("mbar")
+        mbar, status = gauge.read_pressure()
+        self.assertEqual(status["units"], "mbar")
+        gauge.set_units("Torr")
+        torr, status = gauge.read_pressure()
+        self.assertEqual(status["units"], "Torr")
+        self.assertAlmostEqual(mbar, 1013.25, delta=20)
+        self.assertAlmostEqual(torr, 760.0, delta=15)
+
+    def test_pump_down_then_vent(self):
+        start = SIM_HOLD_S
+        pumped = simulated_pressure_pa(start + 2.0)
+        self.assertGreater(math.log10(simulated_pressure_pa(start) / pumped), 0.3)
+
+        base_t = SIM_HOLD_S + SIM_PUMP_S + 0.5 * SIM_BASE_HOLD_S
+        self.assertAlmostEqual(simulated_pressure_pa(base_t), SIM_BASE_PA, delta=0.05 * SIM_BASE_PA)
+
+        # The log vent only reaches atmosphere at the end of the phase; the
+        # following hold is what gives a recovery watcher its one-second dwell.
+        self.assertAlmostEqual(
+            simulated_pressure_pa(SIM_CYCLE_S),
+            SIM_ATMOSPHERE_PA,
+            delta=0.02 * SIM_ATMOSPHERE_PA,
+        )
+
+    def test_default_trigger_and_recovery_both_fire(self):
+        detector = DropDetector(TriggerConfig())
+        fired = None
+        t = 0.0
+        while t < SIM_HOLD_S + SIM_PUMP_S:
+            if detector.add(t, simulated_pressure_pa(t)):
+                fired = t
+                break
+            t += 0.1
+        self.assertIsNotNone(fired)
+
+        watcher = RecoveryWatcher(detector.run_samples()[0][1], 95.0)
+        recovered = None
+        t = fired
+        while t < 2 * SIM_CYCLE_S:
+            if watcher.add(t, simulated_pressure_pa(t)):
+                recovered = t
+                break
+            t += 0.1
+        self.assertIsNotNone(recovered)
+        self.assertLess(recovered, SIM_CYCLE_S + SIM_HOLD_S)
+
+    def test_rejects_unknown_units_code(self):
+        link = SimulatedLink(clock=lambda: 0.0)
+        link.write(b"!S755 9\r")
+        self.assertEqual(link.read_line(), b"*S755 04\r")
 
 
 class TestSerialPortChoice(unittest.TestCase):

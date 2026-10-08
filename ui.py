@@ -1,4 +1,4 @@
-"""Shared colors and the two-state toggle used by the monitor and plotter."""
+"""Shared colors and the segmented toggle used by the monitor and plotter."""
 
 from __future__ import annotations
 
@@ -32,9 +32,11 @@ else:
 
 
 class SegmentedToggle(ctk.CTkFrame):
-    """Two-state selector whose active segment keeps white text on the accent."""
+    """Selector whose active segment keeps white text on the accent."""
 
-    def __init__(self, parent, values: list[str], command=None, height: int = 30):
+    def __init__(
+        self, parent, values: list[str], command=None, height: int = 30, button_width: int = 140
+    ):
         super().__init__(parent, fg_color=FIELD, corner_radius=8)
         self._command = command
         self._value = values[0]
@@ -44,6 +46,7 @@ class SegmentedToggle(ctk.CTkFrame):
                 self,
                 text=value,
                 height=height,
+                width=button_width,
                 corner_radius=6,
                 font=ctk.CTkFont(family=HEAD_FONT, size=12),
                 command=lambda v=value: self.set(v, notify=True),

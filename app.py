@@ -391,7 +391,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
 
         # Gauge and spectrometer cards together outgrow small screens.
         sidebar = ctk.CTkScrollableFrame(
-            root, fg_color="transparent", width=316, scrollbar_button_color=BORDER
+            root, fg_color="transparent", width=360, scrollbar_button_color=BORDER
         )
         sidebar.grid(row=1, column=0, sticky="nsw", padx=(0, 16))
 
@@ -419,11 +419,15 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self._card_title(card, "Connection")
 
         self.transport = SegmentedToggle(
-            card, ["WiFi", "Serial"], command=self._on_transport, height=32
+            card,
+            ["WiFi", "Serial", "Simulated"],
+            command=self._on_transport,
+            height=32,
+            button_width=96,
         )
         self.transport.pack(fill="x", padx=16)
         saved_transport = str(self.settings.get("transport", "WiFi"))
-        if saved_transport in ("WiFi", "Serial"):
+        if saved_transport in ("WiFi", "Serial", "Simulated"):
             self.transport.set(saved_transport)
 
         ctk.CTkLabel(
@@ -654,13 +658,16 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self._refresh_link_summary()
 
     def _refresh_link_summary(self) -> None:
-        if self.transport.get() == "WiFi":
+        choice = self.transport.get()
+        if choice == "WiFi":
             host = self.host_var.get().strip() or DEFAULT_HOST
             port = self.tcp_var.get().strip() or str(DEFAULT_TCP_PORT)
             self.link_summary_var.set(f"{host}:{port}")
-        else:
+        elif choice == "Serial":
             port = self.port_var.get() or "(no port)"
             self.link_summary_var.set(f"{port}  ·  {self.baud_var.get()} baud")
+        else:
+            self.link_summary_var.set("No hardware · atmosphere, pump-down, vent")
 
     def _on_mode(self, value: str) -> None:
         if self.logging or self.armed:
@@ -877,16 +884,22 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
 
     def connect(self) -> None:
         self.disconnect()
-        transport = "wifi" if self.transport.get() == "WiFi" else "serial"
+        choice = self.transport.get()
+        transport = {"WiFi": "wifi", "Serial": "serial"}.get(choice, "simulated")
         link = None
         try:
-            link = open_link(
-                transport,
-                serial_port=self.port_var.get(),
-                baud=int(self.baud_var.get()),
-                host=self.host_var.get().strip(),
-                tcp_port=int(str(self.tcp_var.get()).strip()),
-            )
+            kwargs = {}
+            if transport == "serial":
+                kwargs = {
+                    "serial_port": self.port_var.get(),
+                    "baud": int(self.baud_var.get()),
+                }
+            elif transport == "wifi":
+                kwargs = {
+                    "host": self.host_var.get().strip(),
+                    "tcp_port": int(str(self.tcp_var.get()).strip()),
+                }
+            link = open_link(transport, **kwargs)
             gauge = NAPG200(link)
             identity = gauge.identity()
             serial = gauge.serial_number()

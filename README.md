@@ -22,8 +22,10 @@ The spectrometer additionally needs, once per PC:
 - the Ocean Optics USB driver: run `.venv\Scripts\seabreeze_os_setup.exe` as
   administrator, then plug in the USB4000.
 
-A **Simulated USB4000** is always in the spectrometer list, so the PL side can be
-tried without hardware.
+A **Simulated USB4000** is always in the spectrometer list, and the gauge
+transport list includes **Simulated**, so both sides can be tried without
+hardware. The simulated gauge repeats a pump-down: it rests at atmosphere,
+falls to about 1 Pa, holds, then vents.
 
 ## Pump-down monitor
 
@@ -156,7 +158,7 @@ on the real pump start.
 | `app.py` | UI, sampling loop, live plot |
 | `pl_panel.py` | Spectrometer card, live spectrum, PL recording linked to runs |
 | `spectrometer/` | seabreeze device + simulator, acquisition thread, dark/boxcar, `.npz` storage |
-| `gauge.py` | RS485/TCP transports and the gauge ASCII protocol |
+| `gauge.py` | RS485/TCP transports, simulated gauge, and the ASCII protocol |
 | `trigger.py` | Drop detection, baseline anchoring, vent/recovery watching |
 | `metrics.py` | Derived run statistics (elapsed, rate, minimum) |
 | `runs.py` | Stored runs, CSV loading, overlay colors |
