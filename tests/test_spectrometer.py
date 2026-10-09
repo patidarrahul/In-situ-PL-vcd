@@ -12,7 +12,7 @@ import numpy as np
 
 from spectrometer import storage
 from spectrometer.controller import SpectrometerController
-from spectrometer.device import SIMULATED_SERIAL, DeviceInfo
+from spectrometer.device import SIMULATED_SERIAL, DeviceInfo, SimulatedSpectrometer
 from spectrometer.processing import boxcar, process
 
 
@@ -91,6 +91,24 @@ class TestRecorder(unittest.TestCase):
             rec.offer(fake_frame(k, k + 0.5), np.ones(4))
         rec.trim_after(2.0)
         self.assertEqual(rec.t_start, [0, 1, 2])
+
+
+class TestSimulatedDark(unittest.TestCase):
+    def test_dark_frame_has_no_peaks_and_subtraction_restores_them(self):
+        dev = SimulatedSpectrometer()
+        dev.set_integration_time_us(10_000)
+        peak = int(np.argmax(dev._signal_per_ms))
+
+        dev.begin_frame()
+        lit = dev.read()
+        dev.arm_dark_capture()
+        dev.begin_frame()
+        dark = dev.read()
+        dev.begin_frame()
+        again = dev.read()
+
+        self.assertGreater(lit[peak] - dark[peak], 200)
+        self.assertGreater((again - dark)[peak], 200)
 
 
 class TestController(unittest.TestCase):

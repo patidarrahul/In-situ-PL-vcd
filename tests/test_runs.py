@@ -18,7 +18,10 @@ from runs import (
     Run,
     color_for_index,
     load_run_csv,
+    sanitize_save_name,
+    save_basename,
     thin_points,
+    unique_save_path,
     units_from_header,
 )
 
@@ -150,6 +153,45 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(
             resolve_browse_dir(settings["last_browse_dir"]), folder
         )
+
+
+class TestSaveNames(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_blank_name_falls_back(self):
+        self.assertEqual(sanitize_save_name("   "), "pressure")
+        self.assertEqual(sanitize_save_name("a/b:c"), "a_b_c")
+
+    def test_single_run_is_name_and_timestamp(self):
+        self.assertEqual(save_basename("wafer A", "20261009_094600"), "wafer A_20261009_094600")
+
+    def test_cycles_share_the_timestamp(self):
+        stamp = "20261009_094600"
+        self.assertEqual(save_basename("wafer A", stamp, run=1), "wafer A_20261009_094600_run1")
+        self.assertEqual(save_basename("wafer A", stamp, run=2), "wafer A_20261009_094600_run2")
+
+    def test_both_pressure_and_pl_marks_the_name(self):
+        stamp = "20261009_094600"
+        self.assertEqual(
+            save_basename("wafer A", stamp, both=True),
+            "wafer A_PL_and_Pressure_20261009_094600",
+        )
+        self.assertEqual(
+            save_basename("wafer A", stamp, run=2, both=True),
+            "wafer A_PL_and_Pressure_20261009_094600_run2",
+        )
+
+    def test_unique_path_adds_a_suffix(self):
+        folder = Path(self.tmp.name)
+        first = unique_save_path(folder, "wafer_20261009_094600_run1", ".csv")
+        first.write_text("x")
+        second = unique_save_path(folder, "wafer_20261009_094600_run1", ".csv")
+        self.assertEqual(first.name, "wafer_20261009_094600_run1.csv")
+        self.assertEqual(second.name, "wafer_20261009_094600_run1_2.csv")
 
 
 if __name__ == "__main__":

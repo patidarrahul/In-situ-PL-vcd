@@ -16,12 +16,14 @@ import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-from runs import Run
+from charts import wavelength_indices, wavelength_limits
+from runs import Run, sanitize_save_name, unique_save_path
 from spectrometer import device as spectro_device
 from spectrometer import storage as spectro_storage
 from spectrometer.controller import SpectrometerController
 from ui import (
     ACCENT,
+    ACCENT_HOVER,
     AMBER,
     BORDER,
     CARD,
@@ -33,6 +35,7 @@ from ui import (
     HEAD_FONT,
     MONO_FONT,
     MUTED,
+    ON_ACCENT,
     TEXT,
     SegmentedToggle,
 )
@@ -40,9 +43,18 @@ from ui import (
 SPECTRO_POLL_MS = 100
 SPECTRUM_REDRAW_S = 0.15
 DEFAULT_INTEGRATION_MS = 100.0
-DEFAULT_PL_INTERVAL_S = 1.0
+DEFAULT_PL_INTERVAL_S = 0.5
 NO_SPECTROMETER = "(no spectrometer found)"
 BACKENDS = ["Default", "cseabreeze", "pyseabreeze"]
+
+
+def _nm_setting(value) -> str:
+    if value is None or value == "":
+        return ""
+    try:
+        return f"{float(value):g}"
+    except (TypeError, ValueError):
+        return ""
 
 
 class SpectrometerPanel:
@@ -73,6 +85,8 @@ class SpectrometerPanel:
         self.nonlin_var = tk.BooleanVar(value=bool(saved.get("nonlinearity", False)))
         self.spectro_info_var = tk.StringVar(value="Not connected")
         self.dark_info_var = tk.StringVar(value="No dark spectrum stored")
+        self.wl_min_var = tk.StringVar(value=_nm_setting(saved.get("wl_min_nm")))
+        self.wl_max_var = tk.StringVar(value=_nm_setting(saved.get("wl_max_nm")))
 
     def _spectro_settings_dict(self) -> dict:
         return {
@@ -85,6 +99,8 @@ class SpectrometerPanel:
             "nonlinearity": bool(self.nonlin_var.get()),
             "electric_dark": bool(self.edark_switch.get()),
             "pl_with_run": bool(self.link_switch.get()),
+            "wl_min_nm": self.wl_min_var.get().strip(),
+            "wl_max_nm": self.wl_max_var.get().strip(),
         }
 
     def _switch(self, parent, text: str, command=None, width: int = 36) -> ctk.CTkSwitch:
@@ -139,10 +155,10 @@ class SpectrometerPanel:
 
         buttons = ctk.CTkFrame(card, fg_color="transparent")
         buttons.pack(fill="x", padx=16, pady=(10, 4))
-        self._primary_button(buttons, "Connect", self.connect_spectrometer, width=130).pack(
-            side="left", padx=(0, 8)
+        self.spectro_connect_btn = self._primary_button(
+            buttons, "Connect", self.connect_spectrometer, width=130
         )
-        self._ghost_button(buttons, "Disconnect", self.disconnect_spectrometer, width=110).pack(side="left")
+        self.spectro_connect_btn.pack(side="left")
 
         fields = ctk.CTkFrame(card, fg_color="transparent")
         fields.pack(fill="x", padx=16, pady=(8, 0))
@@ -156,6 +172,29 @@ class SpectrometerPanel:
         for entry, handler in ((self.int_entry, self._apply_integration), (self.boxcar_entry, self._apply_processing)):
             entry.bind("<Return>", lambda _e, h=handler: h())
             entry.bind("<FocusOut>", lambda _e, h=handler: h())
+        self._field_label(fields, "Wavelength from (nm)").grid(
+            row=2, column=0, sticky="ew", padx=(0, 6), pady=(8, 0)
+        )
+        self._field_label(fields, "to (nm)").grid(
+            row=2, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
+        )
+        self.wl_min_entry = self._entry(fields, self.wl_min_var)
+        self.wl_max_entry = self._entry(fields, self.wl_max_var)
+        self.wl_min_entry.grid(row=3, column=0, sticky="ew", padx=(0, 6))
+        self.wl_max_entry.grid(row=3, column=1, sticky="ew", padx=(6, 0))
+        for entry in (self.wl_min_entry, self.wl_max_entry):
+            entry.bind("<Return>", lambda _e: self._apply_wavelength_view())
+            entry.bind("<FocusOut>", lambda _e: self._apply_wavelength_view())
+
+        ctk.CTkLabel(
+            card,
+            text="Blank shows the full spectrum. Saved files still keep every wavelength.",
+            text_color=MUTED,
+            font=ctk.CTkFont(family=HEAD_FONT, size=11),
+            anchor="w",
+            justify="left",
+            wraplength=300,
+        ).pack(fill="x", padx=16, pady=(4, 0))
 
         switches = ctk.CTkFrame(card, fg_color="transparent")
         switches.pack(fill="x", padx=16, pady=(12, 0))
@@ -184,17 +223,14 @@ class SpectrometerPanel:
         ).pack(fill="x", padx=16, pady=(4, 0))
 
         record_row = ctk.CTkFrame(card, fg_color="transparent")
-        record_row.pack(fill="x", padx=16, pady=(10, 0))
-        self._ghost_button(record_row, "Save spectrum  ·  P", self.save_spectrum, width=150).pack(
-            side="left", padx=(0, 8)
+        record_row.pack(fill="x", padx=16, pady=(10, 16))
+        self._ghost_button(record_row, "Record PL  ·  P", self.save_spectrum, width=150).pack(
+            side="left"
         )
-        self.pl_series_btn = self._ghost_button(record_row, "Record PL", self.toggle_pl_series, width=110)
-        self.pl_series_btn.pack(side="left")
-
-        self.link_switch = self._switch(card, "Record PL with each pump-down run")
-        self.link_switch.pack(anchor="w", padx=16, pady=(12, 16))
-        if self.settings.get("pl_with_run", True):
-            self.link_switch.select()
+        self.pl_series_btn = self._ghost_button(
+            record_row, "Record series", self.toggle_pl_series, width=130
+        )
+        self.pl_series_btn.pack(side="left", padx=(8, 0))
 
         self._spectro_locked_widgets = [
             self.int_entry,
@@ -207,7 +243,7 @@ class SpectrometerPanel:
 
     def _build_pl_hero(self, parent) -> None:
         hero = self._card(parent)
-        hero.grid(row=0, column=1, sticky="nsew", padx=(14, 0))
+        hero.grid(row=1, column=1, sticky="nsew", padx=(14, 0))
         ctk.CTkLabel(
             hero,
             text="PL peak",
@@ -241,7 +277,7 @@ class SpectrometerPanel:
 
     def _build_spectrum_plot(self, parent) -> None:
         card = self._card(parent)
-        card.grid(row=2, column=1, sticky="nsew", padx=(14, 0))
+        card.grid(row=3, column=1, sticky="nsew", padx=(14, 0))
 
         head = ctk.CTkFrame(card, fg_color="transparent")
         head.pack(fill="x", padx=20, pady=(14, 6))
@@ -305,7 +341,7 @@ class SpectrometerPanel:
         ).pack(anchor="w", padx=16, pady=(10, 0))
         self._field_label(card, "PL polling interval (s)").pack(fill="x", padx=16, pady=(10, 2))
         self._entry(card, self.pl_interval_var).pack(fill="x", padx=16)
-        self._field_label(card, "Record PL: number of spectra (0 = until stopped)").pack(
+        self._field_label(card, "Time series: number of spectra (0 = until stopped)").pack(
             fill="x", padx=16, pady=(10, 2)
         )
         self._entry(card, self.pl_count_var).pack(fill="x", padx=16)
@@ -314,7 +350,7 @@ class SpectrometerPanel:
         ctk.CTkLabel(
             card,
             text="The polling interval applies to PL recorded with each run and to "
-            "Record PL. 0 records every spectrum. PL files (.npz) are saved next to "
+            "Record time series PL. 0 records every spectrum. PL files (.npz) are saved next to "
             "the pressure CSVs.",
             text_color=MUTED,
             font=ctk.CTkFont(family=HEAD_FONT, size=11),
@@ -334,7 +370,7 @@ class SpectrometerPanel:
         if not sc.connected:
             self._set_pl_status("Spectrometer off", MUTED)
         elif sc.recording:
-            label = "PL with run" if sc.linked else "Recording PL"
+            label = "PL with run" if sc.linked else "Recording time series"
             self._set_pl_status(f"{label} · {sc.recorder.count}", AMBER)
         else:
             self._set_pl_status("Spectrometer live", GREEN)
@@ -348,13 +384,26 @@ class SpectrometerPanel:
         if self.spectro.connected and not self.spectro.device.supports_electric_dark:
             self.edark_switch.configure(state="disabled")
         self.pl_series_btn.configure(
-            text="Stop PL" if self.spectro.recording and not self.spectro.linked else "Record PL",
+            text="Stop series" if self.spectro.recording and not self.spectro.linked else "Record series",
             state="disabled" if self.spectro.linked else "normal",
         )
         self._refresh_pl_status()
 
     def _pl_notice(self, text: str) -> None:
         self._pl_note = text
+        if not text:
+            self._set_pl_activity(None)
+            return
+        tone = "done" if text.lower().startswith("saved") else "run"
+        self._set_pl_activity(text, tone)
+
+    def _set_pl_activity(self, text: str | None, tone: str | None = "run") -> None:
+        """Show a PL recording message in the status card."""
+        if not hasattr(self, "pl_activity_var"):
+            return
+        self.pl_activity_var.set(text or "")
+        self._pl_activity_tone = tone if text else ""
+        self._refresh_status_card()
 
     def _read_float(self, var: tk.StringVar, fallback: float, minimum: float = 0.0) -> float:
         try:
@@ -375,6 +424,49 @@ class SpectrometerPanel:
             value = fallback
         var.set(str(value))
         return value
+
+    def _peek_nm(self, var: tk.StringVar) -> float | None:
+        text = var.get().strip()
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+
+    def _read_wavelength_range(self) -> tuple[float | None, float | None]:
+        return wavelength_limits(self._peek_nm(self.wl_min_var), self._peek_nm(self.wl_max_var))
+
+    def _apply_wavelength_view(self, persist: bool = True) -> None:
+        """Limit the live plot and peak to the typed range. Acquisition is unchanged."""
+        for var in (self.wl_min_var, self.wl_max_var):
+            text = var.get().strip()
+            if not text:
+                continue
+            try:
+                float(text)
+            except ValueError:
+                var.set("")
+        lo, hi = self._read_wavelength_range()
+        typed_lo = self.wl_min_var.get().strip()
+        typed_hi = self.wl_max_var.get().strip()
+        if lo is not None and hi is not None and typed_lo and typed_hi:
+            if float(typed_lo) != lo or float(typed_hi) != hi:
+                self.wl_min_var.set(f"{lo:g}")
+                self.wl_max_var.set(f"{hi:g}")
+        if self.spectro.device is not None:
+            wl = np.asarray(self.spectro.device.wavelengths, dtype=float)
+            keep = wavelength_indices(wl, lo, hi)
+            shown = wl[keep]
+            left = float(shown.min()) if lo is None else lo
+            right = float(shown.max()) if hi is None else hi
+            if right > left:
+                self.spec_ax.set_xlim(left, right)
+        self._redraw_spectrum()
+        if self.spectro.last_frame is not None:
+            self._update_pl_readout()
+        if persist:
+            self._persist_settings()
 
     def _pl_interval(self) -> float:
         return self._read_float(self.pl_interval_var, DEFAULT_PL_INTERVAL_S)
@@ -446,13 +538,16 @@ class SpectrometerPanel:
             self.edark_switch.deselect()
         self.spectro_menu.configure(state="disabled")
         self.spectro_refresh_btn.configure(state="disabled")
-        self.spec_ax.set_xlim(float(dev.wavelengths[0]), float(dev.wavelengths[-1]))
+        self._apply_wavelength_view(persist=False)
         self.pl_error_var.set("")
         self.pl_meta_var.set("Waiting for the first spectrum…")
         self._pl_note = ""
+        self._set_pl_activity(None)
         self._update_dark_info()
         self._update_spectro_lock()
+        self._refresh_run_button()
         self._persist_settings()
+        self._sync_spectro_button(True)
 
     def disconnect_spectrometer(self) -> None:
         self._show_pl_notices(self.spectro.disconnect())
@@ -462,9 +557,37 @@ class SpectrometerPanel:
         self.spectro_info_var.set("Not connected")
         self.pl_peak_var.set("--")
         self.pl_meta_var.set("Connect the spectrometer to see PL")
+        self._pl_note = ""
+        self._set_pl_activity(None)
         self.subtract_switch.deselect()
         self._update_dark_info()
         self._update_spectro_lock()
+        self._refresh_run_button()
+        self._sync_spectro_button(False)
+
+    def _sync_spectro_button(self, connected: bool) -> None:
+        button = getattr(self, "spectro_connect_btn", None)
+        if button is None:
+            return
+        if connected:
+            button.configure(
+                text="Disconnect",
+                command=self.disconnect_spectrometer,
+                fg_color=CARD,
+                hover_color=FIELD,
+                text_color=TEXT,
+                border_width=1,
+                border_color=BORDER,
+            )
+            return
+        button.configure(
+            text="Connect",
+            command=self.connect_spectrometer,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            text_color=ON_ACCENT,
+            border_width=0,
+        )
 
     def _show_pl_notices(self, notices: list[str]) -> None:
         if notices:
@@ -526,6 +649,10 @@ class SpectrometerPanel:
 
     # -------------------------------------------------------- recording
 
+    def _save_prefix(self) -> str:
+        """Name typed on the Run card, used for spectra saved outside a gauge run."""
+        return sanitize_save_name(self.file_name_var.get())
+
     def _pressure_extra(self) -> dict:
         """Gauge reading to store alongside a single spectrum."""
         with self.lock:
@@ -545,7 +672,7 @@ class SpectrometerPanel:
         if not self.spectro.connected:
             self.pl_error_var.set("Connect the spectrometer first")
             return
-        self.spectro.request_single(self.data_dir, "pl", self._pressure_extra())
+        self.spectro.request_single(self.data_dir, self._save_prefix(), self._pressure_extra())
         self._pl_notice("Saving next spectrum…")
 
     def toggle_pl_series(self) -> None:
@@ -559,7 +686,7 @@ class SpectrometerPanel:
             self.pl_error_var.set("Connect the spectrometer first")
             return
         try:
-            path = spectro_storage.make_path(self.data_dir, "pl", "timeseries")
+            path = spectro_storage.make_path(self.data_dir, self._save_prefix(), "timeseries")
             sc.start_series(path, self._pl_interval(), self._read_int(self.pl_count_var, 0))
         except Exception as exc:
             self.pl_error_var.set(str(exc))
@@ -571,19 +698,17 @@ class SpectrometerPanel:
     def _pl_run_started(self, t0: float, csv_path: Path | None, label: str | None) -> None:
         """A pump-down run began: record PL on the same time axis."""
         sc = self.spectro
-        if not sc.connected or not self.link_switch.get():
+        if not self._recording_pl_with_pressure():
             return
         if sc.recording:
             if not sc.linked:
-                self._pl_notice("Record PL is running · this run's PL is not linked")
+                self._pl_notice("Time series PL is running · this run's PL is not linked")
                 return
             self._pl_run_stopped(None)
         if csv_path is not None:
-            path = csv_path.with_name(csv_path.stem.replace("pressure", "pl", 1) + ".npz")
-            if path.exists():
-                path = spectro_storage.make_path(csv_path.parent, path.stem, "pl")
+            path = unique_save_path(csv_path.parent, csv_path.stem, ".npz")
         else:
-            path = spectro_storage.make_path(self.data_dir, "pl", "run")
+            path = spectro_storage.make_path(self.data_dir, self._save_prefix(), "run")
         try:
             sc.start_series(path, self._pl_interval(), 0, t0=t0, linked=True)
         except Exception as exc:
@@ -646,21 +771,24 @@ class SpectrometerPanel:
         frame, processed = sc.last_frame, sc.last_processed
         if frame is None or processed is None:
             return
-        wl = sc.device.wavelengths
-        i = int(np.argmax(processed))
+        wl = np.asarray(sc.device.wavelengths, dtype=float)
+        lo, hi = self._read_wavelength_range()
+        keep = wavelength_indices(wl, lo, hi)
+        view = np.asarray(processed, dtype=float)[keep]
+        i = int(keep[int(np.argmax(view))])
         self.pl_peak_var.set(f"{wl[i]:.1f} nm")
         rate = f"  ·  {sc.rate_hz:.1f} spectra/s" if sc.rate_hz else ""
         meta = (
             f"{processed[i]:,.0f} counts  ·  {frame.integration_time_us / 1000:g} ms × "
             f"{frame.scans_averaged}{rate}"
         )
-        if sc.recording:
+        if sc.recording and sc.recorder is not None:
             rec = sc.recorder
-            meta += f"  ·  {rec.count} recorded"
+            counted = f"{rec.count} recorded"
             if not sc.linked and rec.n_target:
-                meta = meta + f" / {rec.n_target}"
-        if self._pl_note:
-            meta = f"{self._pl_note}  ·  {meta}"
+                counted = f"{counted} / {rec.n_target}"
+            note = f"{self._pl_note}  ·  {counted}" if self._pl_note else counted
+            self._set_pl_activity(note, "run")
         self.pl_meta_var.set(meta)
         if frame.saturated:
             self.pl_error_var.set("Detector saturated · lower the integration time")
@@ -677,7 +805,15 @@ class SpectrometerPanel:
             return
         raw = self.spectrum_toggle.get() == "Raw"
         y = frame.counts if raw else sc.process(frame.counts)
-        self.spec_line.set_data(sc.device.wavelengths, y)
+        wl = np.asarray(sc.device.wavelengths, dtype=float)
+        lo, hi = self._read_wavelength_range()
+        keep = wavelength_indices(wl, lo, hi)
+        self.spec_line.set_data(wl[keep], np.asarray(y, dtype=float)[keep])
+        shown = wl[keep]
+        left = float(shown.min()) if lo is None else lo
+        right = float(shown.max()) if hi is None else hi
+        if right > left:
+            self.spec_ax.set_xlim(left, right)
         parts = [f"{sc.device.model}", "raw counts" if raw else "processed"]
         if not raw:
             if sc.active_dark() is not None:

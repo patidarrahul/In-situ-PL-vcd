@@ -102,6 +102,9 @@ class AcquisitionWorker(threading.Thread):
                 dev.read(edark, nonlin)
                 continue
 
+            begin = getattr(dev, "begin_frame", None)
+            if callable(begin):
+                begin()
             t_start = time.time()
             total = np.zeros(dev.pixels, dtype=float)
             peak = -np.inf

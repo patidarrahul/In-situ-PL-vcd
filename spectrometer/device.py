@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -139,6 +140,25 @@ class SimulatedSpectrometer:
             + 8.0 * np.exp(-0.5 * ((wl - 780.0) / 60.0) ** 2)
         )
         self._fixed_pattern = self._rng.normal(0.0, 20.0, self.pixels)
+        self._lock = threading.Lock()
+        # The next begin_frame after arm_dark_capture is baseline only, as if
+        # the light were blocked. Later frames include the PL again.
+        self._dark_armed = False
+        self._frame_is_dark = False
+
+    def arm_dark_capture(self) -> None:
+        with self._lock:
+            self._dark_armed = True
+
+    def cancel_dark_capture(self) -> None:
+        with self._lock:
+            self._dark_armed = False
+            self._frame_is_dark = False
+
+    def begin_frame(self) -> None:
+        with self._lock:
+            self._frame_is_dark = self._dark_armed
+            self._dark_armed = False
 
     def set_integration_time_us(self, micros: int) -> None:
         self._int_us = int(micros)
@@ -147,7 +167,9 @@ class SimulatedSpectrometer:
         time.sleep(self._int_us / 1e6)
         t_ms = self._int_us / 1000.0
         drift = 1.0 + 0.05 * np.sin(time.time() / 5.0)
-        signal = self._signal_per_ms * t_ms * drift
+        with self._lock:
+            dark_only = self._frame_is_dark
+        signal = 0.0 if dark_only else self._signal_per_ms * t_ms * drift
         dark = self._DARK_LEVEL + self._fixed_pattern + 0.5 * t_ms
         counts = signal + dark
         counts += self._rng.normal(0.0, 8.0, self.pixels) + np.sqrt(np.clip(signal, 0, None)) * self._rng.normal(

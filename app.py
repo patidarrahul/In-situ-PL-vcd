@@ -61,7 +61,16 @@ from metrics import (
     sample_rate_hz,
 )
 from pl_panel import SpectrometerPanel
-from runs import REFERENCE_COLOR, Run, color_for_index, load_run_csv, thin_points
+from runs import (
+    REFERENCE_COLOR,
+    Run,
+    color_for_index,
+    load_run_csv,
+    sanitize_save_name,
+    save_basename,
+    thin_points,
+    unique_save_path,
+)
 from trigger import (
     DEFAULT_DROP_DECADES,
     DEFAULT_PRETRIGGER_S,
@@ -202,7 +211,10 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
             value=str(saved.get("recovery_percent", DEFAULT_RECOVERY_PERCENT))
         )
         self.folder_var = tk.StringVar(value=str(self.data_dir))
+        self.file_name_var = tk.StringVar(value=str(saved.get("file_name", "")))
         self.link_summary_var = tk.StringVar(value="")
+        self._save_name = sanitize_save_name(self.file_name_var.get())
+        self._save_stamp = ""
         self._init_spectro_vars()
 
     def _bind_shortcuts(self) -> None:
@@ -396,15 +408,16 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         sidebar.grid(row=1, column=0, sticky="nsw", padx=(0, 16))
 
         self._build_connection_card(sidebar)
-        self._build_acquisition_card(sidebar)
         self._build_spectrometer_card(sidebar)
+        self._build_acquisition_card(sidebar)
         self._build_curves_card(sidebar)
 
         main = ctk.CTkFrame(root, fg_color="transparent")
         main.grid(row=1, column=1, sticky="nsew")
-        main.grid_rowconfigure(2, weight=1)
+        main.grid_rowconfigure(3, weight=1)
         main.grid_columnconfigure((0, 1), weight=1, uniform="main")
 
+        self._build_status_card(main)
         self._build_hero(main)
         self._build_pl_hero(main)
         self._build_stats(main)
@@ -412,11 +425,49 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self._build_spectrum_plot(main)
 
         self._refresh_link_summary()
+        self._refresh_run_button()
+        self._refresh_status_card()
+
+    def _build_status_card(self, parent) -> None:
+        card = self._card(parent)
+        self.status_card = card
+        card.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
+        self._card_title(card, "Status")
+        self.activity_var = tk.StringVar(value="")
+        self.pl_activity_var = tk.StringVar(value="")
+        self._activity_tone = ""
+        self._pl_activity_tone = ""
+        self.activity_label = ctk.CTkLabel(
+            card,
+            textvariable=self.activity_var,
+            text_color=TEXT,
+            font=ctk.CTkFont(family=HEAD_FONT, size=16, weight="bold"),
+            anchor="w",
+            justify="left",
+            wraplength=640,
+        )
+        self.pl_activity_label = ctk.CTkLabel(
+            card,
+            textvariable=self.pl_activity_var,
+            text_color=TEXT,
+            font=ctk.CTkFont(family=HEAD_FONT, size=16, weight="bold"),
+            anchor="w",
+            justify="left",
+            wraplength=640,
+        )
+        self.status_idle_label = ctk.CTkLabel(
+            card,
+            text="Ready",
+            text_color=MUTED,
+            font=ctk.CTkFont(family=HEAD_FONT, size=16, weight="bold"),
+            anchor="w",
+        )
+        self.status_idle_label.pack(fill="x", padx=16, pady=(0, 16))
 
     def _build_connection_card(self, parent) -> None:
         card = self._card(parent)
         card.pack(fill="x")
-        self._card_title(card, "Connection")
+        self._card_title(card, "Gauge")
 
         self.transport = SegmentedToggle(
             card,
@@ -439,24 +490,39 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         ).pack(fill="x", padx=16, pady=(8, 0))
 
         buttons = ctk.CTkFrame(card, fg_color="transparent")
-        buttons.pack(fill="x", padx=16, pady=(12, 8))
-        self._primary_button(buttons, "Connect", self.connect, width=130).pack(
-            side="left", padx=(0, 8)
-        )
-        self._ghost_button(buttons, "Disconnect", self.disconnect, width=110).pack(side="left")
-        self._ghost_button(card, "Settings…", self.open_settings, width=150).pack(
-            anchor="w", padx=16, pady=(0, 16)
-        )
+        buttons.pack(fill="x", padx=16, pady=(12, 16))
+        self.connect_button = self._primary_button(buttons, "Connect", self.connect, width=130)
+        self.connect_button.pack(side="left", padx=(0, 8))
+        self._ghost_button(buttons, "Settings…", self.open_settings, width=130).pack(side="left")
 
     def _build_acquisition_card(self, parent) -> None:
         card = self._card(parent)
         card.pack(fill="x", pady=(14, 0))
-        self._card_title(card, "Run")
+        self._card_title(card, "Record")
+
+        self.link_switch = self._switch(card, "Record PL with the run")
+        self.link_switch.pack(anchor="w", padx=16, pady=(0, 10))
+        if self.settings.get("pl_with_run", True):
+            self.link_switch.select()
 
         self.mode_toggle = SegmentedToggle(
             card, [MANUAL_MODE, AUTO_MODE], command=self._on_mode, height=32
         )
         self.mode_toggle.pack(fill="x", padx=16, pady=(0, 8))
+
+        self._field_label(card, "File name").pack(fill="x", padx=16, pady=(0, 2))
+        self.file_name_entry = self._entry(card, self.file_name_var)
+        self.file_name_entry.configure(placeholder_text="pressure")
+        self.file_name_entry.pack(fill="x", padx=16)
+        ctk.CTkLabel(
+            card,
+            text="Cycles add _run1, _run2 after the time stamp.",
+            text_color=MUTED,
+            font=ctk.CTkFont(family=HEAD_FONT, size=11),
+            anchor="w",
+            justify="left",
+            wraplength=300,
+        ).pack(fill="x", padx=16, pady=(4, 0))
 
         self.cycle_box = ctk.CTkFrame(card, fg_color="transparent")
         self.cycle_switch = ctk.CTkSwitch(
@@ -474,16 +540,14 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self.run_row = ctk.CTkFrame(card, fg_color="transparent")
         self.run_row.pack(fill="x", padx=16, pady=(8, 6))
         self.start_button = self._primary_button(
-            self.run_row, "Start run  ·  S", self.start_run, width=150
+            self.run_row, "Record  ·  S", self.start_run, width=140
         )
         self.start_button.pack(side="left", padx=(0, 8))
-        self._ghost_button(self.run_row, "Stop  ·  X", self.stop_run, width=110).pack(
-            side="left"
-        )
+        self._ghost_button(self.run_row, "Stop  ·  X", self.stop_run, width=110).pack(side="left")
 
         tail_row = ctk.CTkFrame(card, fg_color="transparent")
         tail_row.pack(fill="x", padx=16, pady=(0, 16))
-        self._ghost_button(tail_row, "Clear curve  ·  C", self.clear_curve, width=150).pack(
+        self._ghost_button(tail_row, "Clear curve  ·  C", self.clear_curve, width=140).pack(
             side="left", padx=(0, 8)
         )
         self._ghost_button(tail_row, "Save plot", self.save_plot, width=110).pack(side="left")
@@ -510,16 +574,14 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
 
         actions = ctk.CTkFrame(card, fg_color="transparent")
         actions.pack(fill="x", padx=16, pady=(12, 16))
-        self._ghost_button(actions, "Compare plots…", self.open_plotter, width=150).pack(
+        self._ghost_button(actions, "Compare plots…", self.open_plotter, width=140).pack(
             side="left", padx=(0, 8)
         )
-        self._ghost_button(actions, "Clear stored runs", self.clear_runs, width=150).pack(
-            side="left"
-        )
+        self._ghost_button(actions, "Clear stored runs", self.clear_runs, width=140).pack(side="left")
 
     def _build_hero(self, parent) -> None:
         hero = self._card(parent)
-        hero.grid(row=0, column=0, sticky="nsew")
+        hero.grid(row=1, column=0, sticky="nsew")
         ctk.CTkLabel(
             hero,
             text="Current pressure",
@@ -552,7 +614,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
 
     def _build_stats(self, parent) -> None:
         stats = ctk.CTkFrame(parent, fg_color="transparent")
-        stats.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(14, 14))
+        stats.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(14, 14))
         self.elapsed_var = self._stat_tile(stats, "Elapsed")
         self.samples_var = self._stat_tile(stats, "Samples · measured rate")
         self.lowest_var = self._stat_tile(stats, "Lowest pressure")
@@ -560,7 +622,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
 
     def _build_plot(self, parent) -> None:
         card = self._card(parent)
-        card.grid(row=2, column=0, sticky="nsew")
+        card.grid(row=3, column=0, sticky="nsew")
 
         head = ctk.CTkFrame(card, fg_color="transparent")
         head.pack(fill="x", padx=20, pady=(14, 6))
@@ -669,21 +731,72 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         else:
             self.link_summary_var.set("No hardware · atmosphere, pump-down, vent")
 
+    def _recording_pl_with_pressure(self) -> bool:
+        """True when a pressure recording will also write the linked PL file."""
+        switch = getattr(self, "link_switch", None)
+        spectro = getattr(self, "spectro", None)
+        if switch is None or spectro is None or not spectro.connected:
+            return False
+        try:
+            return bool(switch.get())
+        except tk.TclError:
+            return False
+
+    def _refresh_run_button(self) -> None:
+        if not hasattr(self, "start_button"):
+            return
+        verb = "Arm" if self.mode_toggle.get() == AUTO_MODE else "Record"
+        self.start_button.configure(text=f"{verb}  ·  S")
+
     def _on_mode(self, value: str) -> None:
         if self.logging or self.armed:
             self.stop_run()
         if value == AUTO_MODE:
             self.cycle_box.pack(fill="x", padx=16, before=self.run_row)
-            self.start_button.configure(text="Arm  ·  S")
             self.meta_var.set("Auto-trigger ready — arm, then start the pump")
         else:
             self.cycle_box.pack_forget()
-            self.start_button.configure(text="Start run  ·  S")
             self.meta_var.set("Manual mode")
+        self._refresh_run_button()
 
     def _set_status(self, text: str, color: str) -> None:
         self.status_var.set(text)
         self.dot.configure(text_color=color)
+
+    def _set_activity(self, text: str | None, tone: str = "run") -> None:
+        """Show a run or cycle message in the status card."""
+        if not hasattr(self, "activity_var"):
+            return
+        self.activity_var.set(text or "")
+        self._activity_tone = tone if text else ""
+        self._refresh_status_card()
+
+    def _refresh_status_card(self) -> None:
+        card = getattr(self, "status_card", None)
+        if card is None:
+            return
+        pressure = self.activity_var.get().strip()
+        pl_text = self.pl_activity_var.get().strip() if hasattr(self, "pl_activity_var") else ""
+        tone = self._activity_tone or getattr(self, "_pl_activity_tone", "")
+        colors = {
+            "run": ("#fef3c7", "#92400e"),
+            "watch": ("#dbeafe", "#1e3a8a"),
+            "done": ("#d1fae5", "#065f46"),
+        }
+        background, foreground = colors.get(tone, (CARD, TEXT))
+        card.configure(fg_color=background)
+        self.activity_label.pack_forget()
+        self.pl_activity_label.pack_forget()
+        self.status_idle_label.pack_forget()
+        if not pressure and not pl_text:
+            self.status_idle_label.pack(fill="x", padx=16, pady=(0, 16))
+            return
+        self.activity_label.configure(text_color=foreground)
+        self.pl_activity_label.configure(text_color=foreground)
+        if pressure:
+            self.activity_label.pack(fill="x", padx=16, pady=(0, 6 if pl_text else 16))
+        if pl_text:
+            self.pl_activity_label.pack(fill="x", padx=16, pady=(0, 16))
 
     def _browse_dir(self) -> str:
         return str(
@@ -728,6 +841,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
                 "window_s": self.window_var.get(),
                 "pretrigger_s": self.pretrigger_var.get(),
                 "recovery_percent": self.recovery_var.get(),
+                "file_name": self.file_name_var.get().strip(),
                 **self._spectro_settings_dict(),
             }
         )
@@ -925,6 +1039,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self.error_var.set("")
         self._persist_settings()
         self._set_status("Connected", GREEN)
+        self._sync_connect_button(True)
         self.ax.set_ylabel(f"Pressure ({self.units})", color=MUTED, fontsize=11, labelpad=8)
         self.canvas.draw_idle()
         # Keep the menu in sync with what the gauge actually reports
@@ -966,6 +1081,31 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self.link = None
         self.gauge = None
         self._set_status("Disconnected", MUTED)
+        self._sync_connect_button(False)
+
+    def _sync_connect_button(self, connected: bool) -> None:
+        button = getattr(self, "connect_button", None)
+        if button is None:
+            return
+        if connected:
+            button.configure(
+                text="Disconnect",
+                command=self.disconnect,
+                fg_color=CARD,
+                hover_color=FIELD,
+                text_color=TEXT,
+                border_width=1,
+                border_color=BORDER,
+            )
+            return
+        button.configure(
+            text="Connect",
+            command=self.connect,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            text_color=ON_ACCENT,
+            border_width=0,
+        )
 
     def _read_interval(self) -> float:
         return self._read_var(self.interval_var, DEFAULT_INTERVAL)
@@ -992,7 +1132,23 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
     def _read_recovery_percent(self) -> float:
         return self._read_var(self.recovery_var, DEFAULT_RECOVERY_PERCENT)
 
-    def _open_csv(self, suffix: str = "") -> str | None:
+    def _capture_save_batch(self) -> None:
+        """Remember the typed name and one time stamp for this start or arm.
+
+        The sampling thread must not read the entry. A cycled batch reuses the
+        stamp and adds ``_run1``, ``_run2``, …
+        """
+        self._save_name = sanitize_save_name(self.file_name_var.get())
+        self._save_stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._save_both = self._recording_pl_with_pressure()
+        self._persist_settings()
+
+    def _set_file_name_locked(self, locked: bool) -> None:
+        if getattr(self, "file_name_entry", None) is None:
+            return
+        self.file_name_entry.configure(state="disabled" if locked else "normal")
+
+    def _open_csv(self, run: int | None = None) -> str | None:
         """Start a fresh CSV; returns an error message when the file is unusable.
 
         The handle stays open for the whole run: reopening it per sample is fine
@@ -1000,7 +1156,13 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         """
         self._close_csv()
         self.data_dir = resolve_data_dir(self.data_dir)
-        path = self.data_dir / f"{time.strftime('pressure_%Y%m%d_%H%M%S')}{suffix}.csv"
+        stem = save_basename(
+            self._save_name,
+            self._save_stamp or None,
+            run=run,
+            both=bool(getattr(self, "_save_both", False)),
+        )
+        path = unique_save_path(self.data_dir, stem, ".csv")
         try:
             handle = path.open("w", newline="")
         except OSError as exc:
@@ -1068,9 +1230,12 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
 
         self._run_label = None
         self._cycling = False
+        self._capture_save_batch()
+        self._set_file_name_locked(True)
         error = self._open_csv()
         self.folder_var.set(str(self.data_dir))
         if error is not None:
+            self._set_file_name_locked(False)
             self.error_var.set(error)
             return
 
@@ -1080,9 +1245,9 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self.t0 = time.time()
         self.error_var.set("")
         self._trigger_note = ""
-        self.meta_var.set(f"Writing {self.csv_path.name}")
-        self._set_status("Logging", AMBER)
+        self._set_activity(f"Writing {self.csv_path.name}", "run")
         self._pl_run_started(self.t0, self.csv_path, None)
+        self._set_status("Logging", AMBER)
         self._start_worker(interval_s)
 
     def _arm(self, interval_s: float) -> None:
@@ -1096,6 +1261,8 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
 
         self.csv_path = None
         self._run_label = None
+        self._capture_save_batch()
+        self._set_file_name_locked(True)
         self._cycle_config = config
         self.detector = DropDetector(config)
         self.recovery = None
@@ -1107,7 +1274,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self._trigger_note = ""
         self._cycle_note = ""
         tail = " · cycling" if cycling else ""
-        self.meta_var.set(f"Armed · watching for a {config.describe()}{tail}")
+        self._set_activity(f"Armed · watching for a {config.describe()}{tail}", "watch")
         self._set_status("Armed · watching", BLUE)
         self._start_worker(interval_s)
 
@@ -1139,6 +1306,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self.logging = False
         self.armed = False
         self.recovery = None
+        self._set_file_name_locked(False)
         self._close_csv()
         self._set_link_timeout(MAX_READ_TIMEOUT_S)
         if self.gauge is not None:
@@ -1151,7 +1319,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
                 self.times.clear()
                 self.pressures.clear()
             self.detector = None
-            self.meta_var.set("Disarmed · no drop was seen")
+            self._set_activity("Disarmed · no drop was seen", "done")
 
     def _snapshot_run(self) -> Run | None:
         """Copy the live curve into a stored Run. Safe to call off the main thread."""
@@ -1183,7 +1351,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
             return None
         self.runs.append(run)
         if self.csv_path is not None:
-            self.meta_var.set(f"Saved {self.csv_path.name}")
+            self._set_activity(f"Saved {self.csv_path.name}", "done")
         self._refresh_curve_widgets()
         return run
 
@@ -1268,7 +1436,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
                 return  # stopped while this was in flight
             self._trigger_note = ""
             self._cycle_note = f"{run.label} saved" if run is not None else "Run saved"
-            self.meta_var.set(f"{self._cycle_note} · watching for the next drop")
+            self._set_activity(f"{self._cycle_note} · watching for the next drop", "watch")
             self._set_status("Armed · watching", BLUE)
 
         self._post(announce)
@@ -1300,7 +1468,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
             RecoveryWatcher(baseline, self._recovery_percent) if self._cycling else None
         )
 
-        error = self._open_csv(f"_run{self.run_index:02d}")
+        error = self._open_csv(self.run_index if self._cycling else None)
         path = self.csv_path
 
         rows = []
@@ -1336,7 +1504,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
                 else f"Drop detected at {format_pressure(trigger_pressure, units)}"
             )
             if path is None:
-                self.meta_var.set(f"{self._trigger_note} · memory only")
+                self._set_activity(f"{self._trigger_note} · memory only", "run")
             # Skip if the run was stopped before this reached the main thread.
             if self.logging and self._run_label == label:
                 self._pl_run_started(started_at, path, label)
@@ -1401,7 +1569,8 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         if not (has_live or self.runs or self.reference):
             self.error_var.set("Nothing to save yet — start a run first")
             return
-        path = resolve_data_dir(self.data_dir) / time.strftime("pumpdown_%Y%m%d_%H%M%S.png")
+        stem = save_basename(self.file_name_var.get())
+        path = unique_save_path(resolve_data_dir(self.data_dir), stem, ".png")
         self.fig.savefig(path, dpi=200, facecolor=CARD, bbox_inches="tight")
         self.error_var.set("")
         self.meta_var.set(f"Saved {path.name}")
@@ -1565,7 +1734,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
                 progress = f"Writing {path.name}  ·  {len(pressures)} samples"
                 if self._trigger_note:
                     progress = f"{self._trigger_note}  ·  {progress}"
-                self.meta_var.set(progress)
+                self._set_activity(progress, "run")
             elif self.armed and self.detector is not None:
                 watching = (
                     f"Armed {format_elapsed(times[-1])} · "
@@ -1573,7 +1742,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
                 )
                 if self._cycle_note:
                     watching = f"{self._cycle_note} · {watching}"
-                self.meta_var.set(watching)
+                self._set_activity(watching, "watch")
         else:
             self.elapsed_var.set("--:--")
             self.samples_var.set("--")

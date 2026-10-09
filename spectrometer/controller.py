@@ -169,11 +169,17 @@ class SpectrometerController:
 
     def request_dark(self) -> None:
         self._pending_dark_t = time.time()
+        arm = getattr(self.device, "arm_dark_capture", None)
+        if callable(arm):
+            arm()
 
     def clear_dark(self) -> None:
         self.dark = None
         self.dark_frame = None
         self._pending_dark_t = None
+        cancel = getattr(self.device, "cancel_dark_capture", None)
+        if callable(cancel):
+            cancel()
 
     def active_dark(self) -> np.ndarray | None:
         return self.dark if self.subtract_dark else None

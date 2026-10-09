@@ -3,9 +3,15 @@
 from __future__ import annotations
 
 import csv
+import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence
+
+# Characters Windows rejects in a file name.
+_UNSAFE_NAME = re.compile(r'[<>:"/\\|?*\x00-\x1f]+')
+DEFAULT_SAVE_NAME = "pressure"
 
 # Distinguishable on white, and none of them clash with the teal live curve.
 CURVE_COLORS = [
@@ -23,6 +29,41 @@ REFERENCE_COLOR = "#475569"
 
 def color_for_index(index: int) -> str:
     return CURVE_COLORS[index % len(CURVE_COLORS)]
+
+
+def sanitize_save_name(name: str) -> str:
+    """A file-name stem the user typed, or ``pressure`` when it is blank."""
+    cleaned = _UNSAFE_NAME.sub("_", str(name or "").strip()).strip(" .")
+    return cleaned or DEFAULT_SAVE_NAME
+
+
+def save_basename(
+    name: str, stamp: str | None = None, run: int | None = None, *, both: bool = False
+) -> str:
+    """``{name}_{timestamp}``, or ``{name}_PL_and_Pressure_{timestamp}`` when both are recorded.
+
+    ``stamp`` is shared by every cycle of one arming, so the run number is
+    what distinguishes ``_run1`` from ``_run2``.
+    """
+    cleaned = sanitize_save_name(name)
+    when = stamp or datetime.now().strftime("%Y%m%d_%H%M%S")
+    if both:
+        cleaned = f"{cleaned}_PL_and_Pressure"
+    if run is None:
+        return f"{cleaned}_{when}"
+    return f"{cleaned}_{when}_run{int(run)}"
+
+
+def unique_save_path(directory: str | Path, stem: str, suffix: str) -> Path:
+    """``stem + suffix`` in ``directory``, adding ``_2`` and so on if it exists."""
+    folder = Path(directory)
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{stem}{suffix}"
+    n = 2
+    while path.exists():
+        path = folder / f"{stem}_{n}{suffix}"
+        n += 1
+    return path
 
 
 def thin_points(

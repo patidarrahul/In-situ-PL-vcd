@@ -18,13 +18,17 @@ from charts import (
     UNITS,
     ChartSpec,
     add_csv_paths,
+    add_pl_paths,
     load_chart,
+    load_pl_for_spec,
     load_runs_for_spec,
     normalize_linestyle,
     render_chart,
+    render_recording,
     save_chart,
+    wavelength_limits,
 )
-from config import remember_browse_dir, resolve_browse_dir, resolve_data_dir
+from config import remember_browse_dir, resolve_browse_dir, resolve_data_dir, save_settings
 from ui import (
     ACCENT,
     ACCENT_HOVER,
@@ -55,6 +59,8 @@ class PlotterWindow(ctk.CTkToplevel):
         self.settings = settings if settings is not None else {}
         self.spec = ChartSpec()
         self._runs = {}
+        self._pl = {}
+        self._spectra = {}
         self._loading = False
         self._redraw_job = None
         self._curve_vars: list[tk.StringVar] = []
@@ -191,15 +197,18 @@ class PlotterWindow(ctk.CTkToplevel):
         self._card_title(card, "Curves")
         buttons = ctk.CTkFrame(card, fg_color="transparent")
         buttons.pack(fill="x", padx=16, pady=(0, 8))
-        self._primary_button(buttons, "Add CSVs…", self.add_csvs, width=130).pack(
+        self._primary_button(buttons, "Add CSVs…", self.add_csvs, width=148).pack(
             side="left", padx=(0, 8)
         )
-        self._ghost_button(buttons, "Remove all", self.remove_all, width=110).pack(
-            side="left"
+        self._ghost_button(buttons, "Add PL…", self.add_pl, width=148).pack(side="left")
+        self._ghost_button(card, "Remove all", self.remove_all, width=120).pack(
+            anchor="w", padx=16, pady=(0, 8)
         )
         self.curves_box = ctk.CTkFrame(card, fg_color="transparent")
-        self.curves_box.pack(fill="x", padx=10, pady=(0, 12))
-        self.curves_hint = tk.StringVar(value="Add pressure CSVs to overlay them")
+        self.curves_box.pack(fill="x", padx=10, pady=(0, 4))
+        self.curves_hint = tk.StringVar(
+            value="Add a pressure CSV, a single PL spectrum, or a PL time series"
+        )
         ctk.CTkLabel(
             self.curves_box,
             textvariable=self.curves_hint,
@@ -208,7 +217,7 @@ class PlotterWindow(ctk.CTkToplevel):
             anchor="w",
             justify="left",
             wraplength=280,
-        ).pack(fill="x", padx=6, pady=(0, 4))
+        ).pack(fill="x", padx=6, pady=(0, 12))
 
     def _build_details_card(self, parent) -> None:
         card = self._card(parent)
@@ -262,6 +271,28 @@ class PlotterWindow(ctk.CTkToplevel):
         self._entry(right, self.ymin_var).pack(fill="x")
         self._field_label(right, "Y max").pack(fill="x", pady=(6, 0))
         self._entry(right, self.ymax_var).pack(fill="x")
+
+        wave = ctk.CTkFrame(card, fg_color="transparent")
+        wave.pack(fill="x", padx=16, pady=(10, 0))
+        wave_left = ctk.CTkFrame(wave, fg_color="transparent")
+        wave_left.pack(side="left", expand=True, fill="x", padx=(0, 6))
+        wave_right = ctk.CTkFrame(wave, fg_color="transparent")
+        wave_right.pack(side="left", expand=True, fill="x")
+        self.wl_min_var = tk.StringVar(value=str(self.settings.get("wl_min_nm") or ""))
+        self.wl_max_var = tk.StringVar(value=str(self.settings.get("wl_max_nm") or ""))
+        self._field_label(wave_left, "Wavelength from (nm)").pack(fill="x")
+        self._entry(wave_left, self.wl_min_var).pack(fill="x")
+        self._field_label(wave_right, "to (nm)").pack(fill="x")
+        self._entry(wave_right, self.wl_max_var).pack(fill="x")
+        ctk.CTkLabel(
+            card,
+            text="Blank shows every wavelength. Saved files still keep the full spectrum.",
+            text_color=MUTED,
+            font=ctk.CTkFont(family=HEAD_FONT, size=11),
+            anchor="w",
+            justify="left",
+            wraplength=290,
+        ).pack(fill="x", padx=16, pady=(4, 0))
 
         self._field_label(card, "Legend").pack(fill="x", padx=16, pady=(10, 2))
         legend_row = ctk.CTkFrame(card, fg_color="transparent")
@@ -335,11 +366,16 @@ class PlotterWindow(ctk.CTkToplevel):
             wraplength=290,
         ).pack(fill="x", padx=16, pady=(0, 16))
 
+    def _curve_group(self, kind: str) -> list:
+        return self.spec.curves if kind == "csv" else self.spec.pl_series
+
     def _rebuild_curve_rows(self) -> None:
         for child in self.curves_box.winfo_children():
             child.destroy()
         self._curve_vars = []
-        if not self.spec.curves:
+        groups = [("csv", self.spec.curves, "Pressure"), ("pl", self.spec.pl_series, "PL")]
+        shown = [(kind, curves, title) for kind, curves, title in groups if curves]
+        if not shown:
             ctk.CTkLabel(
                 self.curves_box,
                 textvariable=self.curves_hint,
@@ -349,11 +385,19 @@ class PlotterWindow(ctk.CTkToplevel):
                 justify="left",
                 wraplength=280,
             ).pack(fill="x", padx=6, pady=(0, 4))
-            self.curves_hint.set("Add pressure CSVs to overlay them")
+            self.curves_hint.set(
+                "Add a pressure CSV, a single PL spectrum, or a PL time series"
+            )
             return
 
-        count = len(self.spec.curves)
-        self.curves_hint.set(f"{count} curve{'s' if count != 1 else ''}")
+        n_csv = len(self.spec.curves)
+        n_pl = len(self.spec.pl_series)
+        parts = []
+        if n_csv:
+            parts.append(f"{n_csv} pressure")
+        if n_pl:
+            parts.append(f"{n_pl} PL")
+        self.curves_hint.set(", ".join(parts))
         ctk.CTkLabel(
             self.curves_box,
             textvariable=self.curves_hint,
@@ -362,111 +406,154 @@ class PlotterWindow(ctk.CTkToplevel):
             anchor="w",
         ).pack(fill="x", padx=6, pady=(0, 4))
 
-        for index, curve in enumerate(self.spec.curves):
-            row = ctk.CTkFrame(self.curves_box, fg_color=FIELD, corner_radius=8)
-            row.pack(fill="x", padx=6, pady=3)
-            ctk.CTkButton(
-                row,
-                text="",
-                width=28,
-                height=28,
-                fg_color=curve.color,
-                hover_color=curve.color,
-                corner_radius=6,
-                command=lambda i=index: self._choose_color(i),
-            ).pack(side="left", padx=(6, 4), pady=6)
-            style_code = normalize_linestyle(curve.linestyle)
-            style_var = tk.StringVar(value=LINESTYLE_LABELS.get(style_code, "Solid"))
-            style_menu = ctk.CTkOptionMenu(
-                row,
-                values=list(LINESTYLES.keys()),
-                variable=style_var,
-                command=lambda choice, i=index: self._on_linestyle(i, choice),
-                width=78,
-                height=28,
-                fg_color=CARD,
-                button_color=FIELD_HOVER,
-                button_hover_color=BORDER,
-                text_color=TEXT,
-                dropdown_fg_color=CARD,
-                dropdown_hover_color=FIELD,
-                dropdown_text_color=TEXT,
-                font=ctk.CTkFont(family=HEAD_FONT, size=11),
-            )
-            style_menu.pack(side="left", padx=(0, 4), pady=6)
-            label_var = tk.StringVar(value=curve.label)
-            self._curve_vars.append(label_var)
-            entry = ctk.CTkEntry(
-                row,
-                textvariable=label_var,
-                fg_color=CARD,
-                border_color=BORDER,
-                border_width=1,
-                text_color=TEXT,
-                height=28,
-            )
-            entry.pack(side="left", expand=True, fill="x", pady=6)
-            entry.bind("<KeyRelease>", lambda _e, i=index, v=label_var: self._on_label(i, v))
-            visible = ctk.CTkSwitch(
-                row,
-                text="",
-                width=36,
-                progress_color=ACCENT,
-                button_color=CARD,
-                button_hover_color=FIELD,
-                fg_color=FIELD_HOVER,
-            )
-            visible.configure(command=lambda i=index, sw=visible: self._on_visible(i, sw))
-            if curve.visible:
-                visible.select()
-            else:
-                visible.deselect()
-            visible.pack(side="left", padx=(6, 2))
-            self._ghost_button(
-                row, "×", lambda i=index: self._remove_curve(i), width=32
-            ).pack(side="left", padx=(0, 6), pady=6)
+        for kind, curves, title in shown:
+            if len(shown) > 1:
+                ctk.CTkLabel(
+                    self.curves_box,
+                    text=title,
+                    text_color=MUTED,
+                    font=ctk.CTkFont(family=HEAD_FONT, size=11),
+                    anchor="w",
+                ).pack(fill="x", padx=6, pady=(6, 0))
+            for index, curve in enumerate(curves):
+                self._build_curve_row(kind, index, curve)
 
-    def _on_label(self, index: int, var: tk.StringVar) -> None:
-        if 0 <= index < len(self.spec.curves):
-            self.spec.curves[index].label = var.get()
+    def _build_curve_row(self, kind: str, index: int, curve) -> None:
+        row = ctk.CTkFrame(self.curves_box, fg_color=FIELD, corner_radius=8)
+        row.pack(fill="x", padx=6, pady=3)
+        ctk.CTkButton(
+            row,
+            text="",
+            width=28,
+            height=28,
+            fg_color=curve.color,
+            hover_color=curve.color,
+            corner_radius=6,
+            command=lambda k=kind, i=index: self._choose_color(k, i),
+        ).pack(side="left", padx=(6, 4), pady=6)
+        style_code = normalize_linestyle(curve.linestyle)
+        style_var = tk.StringVar(value=LINESTYLE_LABELS.get(style_code, "Solid"))
+        style_menu = ctk.CTkOptionMenu(
+            row,
+            values=list(LINESTYLES.keys()),
+            variable=style_var,
+            command=lambda choice, k=kind, i=index: self._on_linestyle(k, i, choice),
+            width=78,
+            height=28,
+            fg_color=CARD,
+            button_color=FIELD_HOVER,
+            button_hover_color=BORDER,
+            text_color=TEXT,
+            dropdown_fg_color=CARD,
+            dropdown_hover_color=FIELD,
+            dropdown_text_color=TEXT,
+            font=ctk.CTkFont(family=HEAD_FONT, size=11),
+        )
+        style_menu.pack(side="left", padx=(0, 4), pady=6)
+        label_var = tk.StringVar(value=curve.label)
+        self._curve_vars.append(label_var)
+        entry = ctk.CTkEntry(
+            row,
+            textvariable=label_var,
+            fg_color=CARD,
+            border_color=BORDER,
+            border_width=1,
+            text_color=TEXT,
+            height=28,
+        )
+        entry.pack(side="left", expand=True, fill="x", pady=6)
+        entry.bind(
+            "<KeyRelease>",
+            lambda _e, k=kind, i=index, v=label_var: self._on_label(k, i, v),
+        )
+        visible = ctk.CTkSwitch(
+            row,
+            text="",
+            width=36,
+            progress_color=ACCENT,
+            button_color=CARD,
+            button_hover_color=FIELD,
+            fg_color=FIELD_HOVER,
+        )
+        visible.configure(command=lambda k=kind, i=index, sw=visible: self._on_visible(k, i, sw))
+        if curve.visible:
+            visible.select()
+        else:
+            visible.deselect()
+        visible.pack(side="left", padx=(6, 2))
+        self._ghost_button(
+            row, "×", lambda k=kind, i=index: self._remove_curve(k, i), width=32
+        ).pack(side="left", padx=(0, 6), pady=6)
+
+    def _on_label(self, kind: str, index: int, var: tk.StringVar) -> None:
+        group = self._curve_group(kind)
+        if 0 <= index < len(group):
+            group[index].label = var.get()
             self._queue_redraw()
 
-    def _on_visible(self, index: int, switch) -> None:
-        if 0 <= index < len(self.spec.curves):
-            self.spec.curves[index].visible = bool(switch.get())
+    def _on_visible(self, kind: str, index: int, switch) -> None:
+        group = self._curve_group(kind)
+        if 0 <= index < len(group):
+            group[index].visible = bool(switch.get())
             self._queue_redraw()
 
-    def _on_linestyle(self, index: int, choice: str) -> None:
-        if 0 <= index < len(self.spec.curves):
-            self.spec.curves[index].linestyle = normalize_linestyle(choice)
+    def _on_linestyle(self, kind: str, index: int, choice: str) -> None:
+        group = self._curve_group(kind)
+        if 0 <= index < len(group):
+            group[index].linestyle = normalize_linestyle(choice)
             self._queue_redraw()
 
-    def _choose_color(self, index: int) -> None:
-        if not (0 <= index < len(self.spec.curves)):
+    def _choose_color(self, kind: str, index: int) -> None:
+        group = self._curve_group(kind)
+        if not (0 <= index < len(group)):
             return
         _rgb, hex_color = colorchooser.askcolor(
-            color=self.spec.curves[index].color, parent=self, title="Curve color"
+            color=group[index].color, parent=self, title="Curve color"
         )
         if not hex_color:
             return
-        self.spec.curves[index].color = hex_color
+        group[index].color = hex_color
         self._rebuild_curve_rows()
         self._queue_redraw()
 
-    def _remove_curve(self, index: int) -> None:
-        if not (0 <= index < len(self.spec.curves)):
+    def _remove_curve(self, kind: str, index: int) -> None:
+        group = self._curve_group(kind)
+        if not (0 <= index < len(group)):
             return
-        path = self.spec.curves[index].path
-        del self.spec.curves[index]
-        self._runs.pop(path, None)
+        path = group[index].path
+        del group[index]
+        if kind == "csv":
+            self._runs.pop(path, None)
+        else:
+            self._pl.pop(path, None)
+            self._spectra.pop(path, None)
         self._rebuild_curve_rows()
         self._queue_redraw()
 
     def remove_all(self) -> None:
         self.spec.curves.clear()
+        self.spec.pl_series.clear()
         self._runs = {}
+        self._pl = {}
+        self._spectra = {}
         self._rebuild_curve_rows()
         self._queue_redraw()
+
+    def _pair_linked_colors(self) -> None:
+        """A PL file and the CSV with the same name share one color."""
+        csv_by_stem = {Path(curve.path).stem: curve for curve in self.spec.curves}
+        for pl in self.spec.pl_series:
+            match = csv_by_stem.get(Path(pl.path).stem)
+            if match is not None:
+                pl.color = match.color
+
+    def _siblings(self, paths, suffix: str) -> list[str]:
+        found = []
+        for raw in paths:
+            sibling = Path(raw).with_suffix(suffix)
+            if sibling.is_file():
+                found.append(str(sibling))
+        return found
 
     def add_csvs(self) -> None:
         chosen = filedialog.askopenfilenames(
@@ -478,15 +565,54 @@ class PlotterWindow(ctk.CTkToplevel):
         if not chosen:
             return
         self._remember_path(chosen[0])
+        before_csv = len(self.spec.curves)
+        before_pl = len(self.spec.pl_series)
         errors = add_csv_paths(self.spec, chosen)
+        pl_errors = add_pl_paths(self.spec, self._siblings(chosen, ".npz"))
+        self._pair_linked_colors()
         runs, load_errors = load_runs_for_spec(self.spec)
+        series, spectra, series_errors = load_pl_for_spec(self.spec)
         self._runs.update(runs)
-        self.error_var.set("\n".join(errors + load_errors))
-        added = len(chosen) - len(errors)
-        if added:
-            self.status_var.set(f"Added {added} curve{'s' if added != 1 else ''}")
+        self._pl.update(series)
+        self._spectra.update(spectra)
+        self.error_var.set("\n".join(errors + pl_errors + load_errors + series_errors))
+        self._report_added(len(self.spec.curves) - before_csv, len(self.spec.pl_series) - before_pl)
         self._rebuild_curve_rows()
         self._queue_redraw()
+
+    def add_pl(self) -> None:
+        chosen = filedialog.askopenfilenames(
+            parent=self,
+            title="Choose PL files to plot",
+            initialdir=self._browse_dir(),
+            filetypes=[("PL files", "*.npz"), ("All files", "*.*")],
+        )
+        if not chosen:
+            return
+        self._remember_path(chosen[0])
+        before_csv = len(self.spec.curves)
+        before_pl = len(self.spec.pl_series)
+        errors = add_pl_paths(self.spec, chosen)
+        csv_errors = add_csv_paths(self.spec, self._siblings(chosen, ".csv"))
+        self._pair_linked_colors()
+        runs, load_errors = load_runs_for_spec(self.spec)
+        series, spectra, series_errors = load_pl_for_spec(self.spec)
+        self._runs.update(runs)
+        self._pl.update(series)
+        self._spectra.update(spectra)
+        self.error_var.set("\n".join(errors + csv_errors + load_errors + series_errors))
+        self._report_added(len(self.spec.curves) - before_csv, len(self.spec.pl_series) - before_pl)
+        self._rebuild_curve_rows()
+        self._queue_redraw()
+
+    def _report_added(self, n_csv: int, n_pl: int) -> None:
+        parts = []
+        if n_csv:
+            parts.append(f"{n_csv} pressure curve{'s' if n_csv != 1 else ''}")
+        if n_pl:
+            parts.append(f"{n_pl} PL time series")
+        if parts:
+            self.status_var.set("Added " + " and ".join(parts))
 
     def _parse_limit(self, raw: str):
         text = raw.strip()
@@ -516,6 +642,11 @@ class PlotterWindow(ctk.CTkToplevel):
         except ValueError:
             width = 1.8
         self.spec.line_width = max(0.4, min(6.0, width))
+        self.spec.wl_min, self.spec.wl_max = wavelength_limits(
+            self._parse_limit(self.wl_min_var.get()),
+            self._parse_limit(self.wl_max_var.get()),
+        )
+        self._remember_wavelength_range()
 
     def _apply_spec_to_ui(self) -> None:
         self._loading = True
@@ -538,8 +669,27 @@ class PlotterWindow(ctk.CTkToplevel):
         else:
             self.grid_switch.deselect()
         self.width_var.set(str(self.spec.line_width))
+        self.wl_min_var.set("" if self.spec.wl_min is None else f"{self.spec.wl_min:g}")
+        self.wl_max_var.set("" if self.spec.wl_max is None else f"{self.spec.wl_max:g}")
         self._loading = False
         self._rebuild_curve_rows()
+
+    def _remember_wavelength_range(self) -> None:
+        saved = (
+            "" if self.spec.wl_min is None else f"{self.spec.wl_min:g}",
+            "" if self.spec.wl_max is None else f"{self.spec.wl_max:g}",
+        )
+        current = (str(self.settings.get("wl_min_nm") or ""), str(self.settings.get("wl_max_nm") or ""))
+        if saved == current:
+            return
+        self.settings["wl_min_nm"] = saved[0]
+        self.settings["wl_max_nm"] = saved[1]
+        save_settings(self.settings)
+        master = self.master
+        if hasattr(master, "wl_min_var"):
+            master.wl_min_var.set(saved[0])
+            master.wl_max_var.set(saved[1])
+            master._apply_wavelength_view(persist=False)
 
     def _queue_redraw(self, *_args) -> None:
         if self._loading:
@@ -554,8 +704,20 @@ class PlotterWindow(ctk.CTkToplevel):
     def _redraw(self) -> None:
         self._redraw_job = None
         self._sync_spec_from_ui()
-        render_chart(self.ax, self.spec, self._runs)
-        self.fig.tight_layout(pad=1.6)
+        self.fig.clear()
+        visible_pl = any(
+            curve.visible and (curve.path in self._pl or curve.path in self._spectra)
+            for curve in self.spec.pl_series
+        )
+        if visible_pl:
+            render_recording(self.fig, self.spec, self._runs, self._pl, self._spectra)
+            self.fig.subplots_adjust(
+                left=0.10, right=0.96, top=0.94, bottom=0.08, hspace=0.38, wspace=0.08
+            )
+        else:
+            ax = self.fig.add_subplot(111)
+            render_chart(ax, self.spec, self._runs)
+            self.fig.tight_layout(pad=1.6)
         self.canvas.draw_idle()
 
     def save_spec(self) -> None:
@@ -595,14 +757,20 @@ class PlotterWindow(ctk.CTkToplevel):
             self.error_var.set(str(exc))
             return
         self._runs, errors = load_runs_for_spec(self.spec)
-        self.error_var.set("\n".join(errors))
+        self._pl, self._spectra, pl_errors = load_pl_for_spec(self.spec)
+        self.error_var.set("\n".join(errors + pl_errors))
         self.status_var.set(f"Loaded {Path(path).name}")
         self._apply_spec_to_ui()
         self._queue_redraw()
 
     def export_figure(self) -> None:
         self._sync_spec_from_ui()
-        if not any(c.visible and c.path in self._runs for c in self.spec.curves):
+        has_pressure = any(c.visible and c.path in self._runs for c in self.spec.curves)
+        has_pl = any(
+            c.visible and (c.path in self._pl or c.path in self._spectra)
+            for c in self.spec.pl_series
+        )
+        if not has_pressure and not has_pl:
             self.error_var.set("Add at least one visible curve before exporting")
             return
         path = filedialog.asksaveasfilename(

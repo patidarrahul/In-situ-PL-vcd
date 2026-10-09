@@ -29,36 +29,45 @@ falls to about 1 Pa, holds, then vents.
 
 ## Pump-down monitor
 
-Pick a transport, **Connect**, then **Start run**. Host, port, baud, units,
+The sidebar is **Gauge**, then **Spectrometer**, then **Record**. Pick a transport, **Connect**, then **Record**. The same button becomes **Disconnect** once the gauge is connected. Host, port, baud, units,
 interval and trigger thresholds live in **Settings…** so Arm stays on screen
 without scrolling. **Overlay all** sits next to the plot's log/linear toggle.
 The app shows the live reading, elapsed time, sample count, lowest pressure
 reached, and pump-down rate in decades/minute, plus a log-scale pressure-vs-time
-curve. Each run writes a timestamped CSV in `data/` (`pressure_YYYYmmdd_HHMMSS.csv`);
-**Save plot** writes a PNG there too. Recorded CSVs, PL files and plots are
+curve. Type a **File name** on the Record card before starting. Each recording writes
+`{name}_YYYYmmdd_HHMMSS.csv` in `data/` (blank uses `pressure`). When **Record PL with the run**
+is on, both files are `{name}_PL_and_Pressure_YYYYmmdd_HHMMSS`. A cycled batch
+keeps that time stamp and adds `_run1`, `_run2`, and so on. The linked PL file
+uses the same name with `.npz`. **Save plot** writes a PNG there too. Recorded
+CSVs, PL files and plots are
 gitignored so lab data is not pushed to GitHub.
 
-Keyboard: **S** start/arm, **X** stop, **C** clear the live curve, **P** save a PL spectrum.
+Keyboard: **S** record or arm, **X** stop, **C** clear the pressure curve, **P** record one PL spectrum.
 
 ## PL spectrometer
 
 The **Spectrometer** card connects the USB4000 and shows its live spectrum next to
-the pressure curve. **Integration (ms)** and **Boxcar width (px)** apply on Enter.
+the pressure curve. The same button becomes **Disconnect** once it is connected. **Integration (ms)** and **Boxcar width (px)** apply on Enter.
+**Wavelength from / to** limits the live plot, the peak readout, and Compare plots.
+Leave either box blank to keep that side open. Recorded files still store every pixel.
 Boxcar width N averages each pixel with N neighbours on each side (2N+1 pixels).
 **Electric dark** uses the detector's masked pixels; **Capture dark** (block the
 light first) stores a dark spectrum and turns on **Subtract dark**. Scans to
 average, nonlinearity correction and the PL polling interval are in **Settings…**.
 
-- **Record PL with each pump-down run** (on by default) — every run, manual or
+- **Record PL with the run**, at the top of the Record card (on by default) — every pressure recording, manual or
   auto-triggered, also records PL at the polling interval into
-  `pl_<timestamp>[_runNN].npz` next to its `pressure_….csv`. `elapsed_s` in the
+  `{name}_PL_and_Pressure_<timestamp>[_runN].npz` next to its matching `.csv`. `elapsed_s` in the
   PL file shares the run's t = 0 (spectra from just before an auto-trigger are
   kept for this), and the file also holds the run's `pressure_elapsed_s`,
   `pressure`, `pressure_units` and `pressure_csv`, so PL vs time vs pressure can
   be plotted from one file.
-- **Save spectrum · P** — saves the next fresh spectrum to `pl_…_single.npz`,
+- **Record PL · P** — saves the next fresh spectrum to `{name}_…_single.npz`,
   with the current gauge reading if a run is live.
-- **Record PL** — a standalone PL time series, independent of the gauge.
+- **Record series** — a standalone PL time series, independent of the gauge. It does not write a pressure file.
+  The default polling interval is 0.5 s.
+
+**Compare plots…** opens the saved-data window. **Add CSVs…** overlays pump-down curves. **Add PL…** loads either kind of PL file. **Record PL** is one spectrum, drawn as intensity versus wavelength, with the pressure CSV above it when that curve is loaded. A time series is a blue-to-red colormap: time on the horizontal axis, wavelength on the vertical axis, intensity as color, with the pump-down curve above the map when the file has one. Choosing either the `.csv` or the matching `.npz` also loads the sibling file when the names match.
 
 Acquisition settings are locked while PL is recording, so all spectra in a file are
 comparable. Each `.npz` holds `wavelengths`, `intensities` (as displayed),
@@ -87,7 +96,7 @@ polling interval eases off automatically and says so.
 
 ### Auto-trigger mode
 
-Switch the **Run** card to **Auto-trigger** and press **Arm** instead of Start.
+Switch the **Record** card to **Auto-trigger** and press **Arm** instead of Record.
 The gauge is polled continuously without writing anything; the run starts by
 itself the moment the pressure falls by the configured amount, so you can arm the
 app and then walk over and open the valve.
@@ -111,7 +120,7 @@ reference curves and shortcuts. **Stop** while armed just disarms.
 
 Turn on **Cycle runs automatically** to capture a whole batch from a single
 **Arm** press — useful when each pump-down is one spin-coated device and nobody
-wants to press Start and Stop twenty times:
+wants to press Record and Stop twenty times:
 
 1. The drop is detected and the run records as usual.
 2. When the chamber vents back to **% of starting pressure** (default 95%) and
@@ -119,7 +128,8 @@ wants to press Start and Stop twenty times:
 3. The app re-arms immediately, so the next pump-down becomes the next run.
 
 Runs are numbered in sequence — `Run 1`, `Run 2`, `Run 3` in the legend, with
-matching files `pressure_<timestamp>_run01.csv`, `_run02`, and so on. Turn on
+matching files `{name}_<timestamp>_run1.csv`, `_run2`, and so on
+(`{name}_PL_and_Pressure_<timestamp>_run1` when PL is recorded with the run). Turn on
 **Overlay all curves** to watch the batch stack up on one plot. Each curve
 includes the vent back to atmosphere at its end, since that is what closes it.
 Numbering restarts at 1 after **Clear stored runs**.
@@ -162,6 +172,8 @@ on the real pump start.
 | `trigger.py` | Drop detection, baseline anchoring, vent/recovery watching |
 | `metrics.py` | Derived run statistics (elapsed, rate, minimum) |
 | `runs.py` | Stored runs, CSV loading, overlay colors |
+| `charts.py` | Comparison-chart spec, PL time-series loading, figure rendering |
+| `plotter.py` | Compare-plots window |
 | `config.py` | Remembers Settings (folder, host, trigger values) |
 | `data/` | Recorded CSVs, PL `.npz` files and saved plots (not in git) |
 | `run_windows.bat` | Launch from `.venv` on Windows |
