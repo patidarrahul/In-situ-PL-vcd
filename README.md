@@ -29,11 +29,8 @@ falls to about 1 Pa, holds, then vents.
 
 ## Pump-down monitor
 
-The sidebar is **Gauge**, then **Spectrometer**, then **Record**. Pick a transport, **Connect**, then **Record**. The same button becomes **Disconnect** once the gauge is connected. Host, port, baud, units,
-interval and trigger thresholds live in **Settings…** so Arm stays on screen
-without scrolling. **Overlay all** sits next to the plot's log/linear toggle.
-The app shows the live reading, elapsed time, sample count, lowest pressure
-reached, and pump-down rate in decades/minute, plus a log-scale pressure-vs-time
+The sidebar starts with **Record** (the **Record PL with the run** switch and **Settings…** share that row; the file name and a **Choose folder** row sit under the mode switch), then **PL**, then **Curves**. **Gauge** and **Spectrometer** each put their dropdown and **Connect** button on one row at the top of the plot area. **Connect** becomes **Disconnect** once that instrument is connected, and the status line shows both connection states when nothing is recording. Current pressure, the PL peak, and elapsed time share the stats row with the sample rate. Host, port, baud, units, interval, integration time, boxcar, and trigger thresholds live in **Settings…**. **Overlay all** sits next to the plot's log/linear toggle.
+The app shows the live reading, elapsed time, and sample count, plus a log-scale pressure-vs-time
 curve. Type a **File name** on the Record card before starting. Each recording writes
 `{name}_YYYYmmdd_HHMMSS.csv` in `data/` (blank uses `pressure`). When **Record PL with the run**
 is on, both files are `{name}_PL_and_Pressure_YYYYmmdd_HHMMSS`. A cycled batch
@@ -46,8 +43,8 @@ Keyboard: **S** record or arm, **X** stop, **C** clear the pressure curve, **P**
 
 ## PL spectrometer
 
-The **Spectrometer** card connects the USB4000 and shows its live spectrum next to
-the pressure curve. The same button becomes **Disconnect** once it is connected. **Integration (ms)** and **Boxcar width (px)** apply on Enter.
+The **PL** card on the left sets the wavelength window, dark subtraction, and **Record PL**. The spectrometer itself connects from the top of the plot area, and that button becomes **Disconnect** once it is connected.
+**Integration (ms)** and **Boxcar width (px)** are in **Settings…** and apply on Enter.
 **Wavelength from / to** limits the live plot, the peak readout, and Compare plots.
 Leave either box blank to keep that side open. Recorded files still store every pixel.
 Boxcar width N averages each pixel with N neighbours on each side (2N+1 pixels).
@@ -139,8 +136,8 @@ end a run; it has to stay up.
 
 ### Comparing runs
 
-- **Save CSVs to** — in Settings; the choice is remembered between launches in
-  `~/.pumpdown_pl_monitor.json`.
+- **Choose folder** — on the Record card; the choice is remembered between launches in
+  `~/.pumpdown_pl_monitor.json`. The same path is also shown under Settings.
 - **Overlay all** — every completed run from this session is drawn behind the
   live curve in its own color, and the axes rescale to fit them all.
 - **Reference curve** — pin any stored run, or load a CSV from an earlier

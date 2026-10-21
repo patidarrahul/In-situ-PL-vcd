@@ -52,12 +52,9 @@ from gauge import (
     status_flags,
 )
 from metrics import (
-    decades_per_min,
     format_elapsed,
     format_pressure,
-    format_rate,
     format_sample_count,
-    lowest_pressure,
     sample_rate_hz,
 )
 from pl_panel import SpectrometerPanel
@@ -211,6 +208,8 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
             value=str(saved.get("recovery_percent", DEFAULT_RECOVERY_PERCENT))
         )
         self.folder_var = tk.StringVar(value=str(self.data_dir))
+        self.folder_caption = tk.StringVar(value=self._folder_caption())
+        self.folder_var.trace_add("write", lambda *_: self.folder_caption.set(self._folder_caption()))
         self.file_name_var = tk.StringVar(value=str(saved.get("file_name", "")))
         self.link_summary_var = tk.StringVar(value="")
         self._save_name = sanitize_save_name(self.file_name_var.get())
@@ -344,21 +343,21 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
             font=ctk.CTkFont(family=HEAD_FONT, size=13, weight="bold"),
         )
 
-    def _stat_tile(self, parent, label: str, last: bool = False) -> tk.StringVar:
+    def _stat_tile(self, parent, label: str, last: bool = False, accent: bool = False) -> tk.StringVar:
         tile = ctk.CTkFrame(
             parent, fg_color=CARD, corner_radius=12, border_width=1, border_color=BORDER
         )
         tile.pack(side="left", expand=True, fill="both", padx=(0, 0 if last else 10))
         ctk.CTkLabel(
             tile, text=label, text_color=MUTED, font=ctk.CTkFont(family=HEAD_FONT, size=11)
-        ).pack(anchor="w", padx=14, pady=(12, 0))
+        ).pack(anchor="w", padx=12, pady=(10, 0))
         var = tk.StringVar(value="--")
         ctk.CTkLabel(
             tile,
             textvariable=var,
-            text_color=TEXT,
-            font=ctk.CTkFont(family=MONO_FONT, size=16),
-        ).pack(anchor="w", padx=14, pady=(2, 12))
+            text_color=ACCENT if accent else TEXT,
+            font=ctk.CTkFont(family=MONO_FONT, size=16, weight="bold" if accent else "normal"),
+        ).pack(anchor="w", padx=12, pady=(2, 10))
         return var
 
     # ----------------------------------------------------------------- layout
@@ -367,59 +366,25 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         root = ctk.CTkFrame(self, fg_color=PAGE)
         root.pack(fill="both", expand=True, padx=20, pady=18)
         root.grid_columnconfigure(1, weight=1)
-        root.grid_rowconfigure(1, weight=1)
+        root.grid_rowconfigure(0, weight=1)
 
-        header = ctk.CTkFrame(root, fg_color="transparent")
-        header.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
-        titles = ctk.CTkFrame(header, fg_color="transparent")
-        titles.pack(side="left")
-        ctk.CTkLabel(
-            titles,
-            text="Pump-down + PL monitor",
-            text_color=TEXT,
-            font=ctk.CTkFont(family=HEAD_FONT, size=23, weight="bold"),
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            titles,
-            text="Edwards APG200 / nAPG200 · RS485  ·  Ocean Optics USB4000",
-            text_color=MUTED,
-            font=ctk.CTkFont(family=HEAD_FONT, size=12),
-        ).pack(anchor="w")
-
-        pill = ctk.CTkFrame(header, fg_color=FIELD, corner_radius=16)
-        pill.pack(side="right")
-        self.dot = ctk.CTkLabel(
-            pill, text="●", text_color=MUTED, font=ctk.CTkFont(size=15), width=14
-        )
-        self.dot.pack(side="left", padx=(12, 4), pady=6)
         self.status_var = tk.StringVar(value="Disconnected")
-        ctk.CTkLabel(
-            pill,
-            textvariable=self.status_var,
-            text_color=TEXT,
-            font=ctk.CTkFont(family=HEAD_FONT, size=12),
-        ).pack(side="left", padx=(0, 14))
-        self._build_spectro_pill(header)
 
-        # Gauge and spectrometer cards together outgrow small screens.
         sidebar = ctk.CTkScrollableFrame(
             root, fg_color="transparent", width=360, scrollbar_button_color=BORDER
         )
-        sidebar.grid(row=1, column=0, sticky="nsw", padx=(0, 16))
-
-        self._build_connection_card(sidebar)
-        self._build_spectrometer_card(sidebar)
+        sidebar.grid(row=0, column=0, sticky="nsw", padx=(0, 16))
         self._build_acquisition_card(sidebar)
+        self._build_spectrometer_card(sidebar)
         self._build_curves_card(sidebar)
 
         main = ctk.CTkFrame(root, fg_color="transparent")
-        main.grid(row=1, column=1, sticky="nsew")
+        main.grid(row=0, column=1, sticky="nsew")
         main.grid_rowconfigure(3, weight=1)
         main.grid_columnconfigure((0, 1), weight=1, uniform="main")
 
+        self._build_connections(main)
         self._build_status_card(main)
-        self._build_hero(main)
-        self._build_pl_hero(main)
         self._build_stats(main)
         self._build_plot(main)
         self._build_spectrum_plot(main)
@@ -431,7 +396,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
     def _build_status_card(self, parent) -> None:
         card = self._card(parent)
         self.status_card = card
-        card.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 14))
+        card.grid(row=1, column=0, columnspan=2, sticky="ew", pady=(0, 12))
         self._card_title(card, "Status")
         self.activity_var = tk.StringVar(value="")
         self.pl_activity_var = tk.StringVar(value="")
@@ -444,7 +409,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
             font=ctk.CTkFont(family=HEAD_FONT, size=16, weight="bold"),
             anchor="w",
             justify="left",
-            wraplength=640,
+            wraplength=720,
         )
         self.pl_activity_label = ctk.CTkLabel(
             card,
@@ -453,57 +418,29 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
             font=ctk.CTkFont(family=HEAD_FONT, size=16, weight="bold"),
             anchor="w",
             justify="left",
-            wraplength=640,
+            wraplength=720,
         )
         self.status_idle_label = ctk.CTkLabel(
             card,
-            text="Ready",
+            text="Disconnected  ·  Spectrometer off",
             text_color=MUTED,
             font=ctk.CTkFont(family=HEAD_FONT, size=16, weight="bold"),
             anchor="w",
         )
-        self.status_idle_label.pack(fill="x", padx=16, pady=(0, 16))
-
-    def _build_connection_card(self, parent) -> None:
-        card = self._card(parent)
-        card.pack(fill="x")
-        self._card_title(card, "Gauge")
-
-        self.transport = SegmentedToggle(
-            card,
-            ["WiFi", "Serial", "Simulated"],
-            command=self._on_transport,
-            height=32,
-            button_width=96,
-        )
-        self.transport.pack(fill="x", padx=16)
-        saved_transport = str(self.settings.get("transport", "WiFi"))
-        if saved_transport in ("WiFi", "Serial", "Simulated"):
-            self.transport.set(saved_transport)
-
-        ctk.CTkLabel(
-            card,
-            textvariable=self.link_summary_var,
-            text_color=MUTED,
-            font=ctk.CTkFont(family=MONO_FONT, size=11),
-            anchor="w",
-        ).pack(fill="x", padx=16, pady=(8, 0))
-
-        buttons = ctk.CTkFrame(card, fg_color="transparent")
-        buttons.pack(fill="x", padx=16, pady=(12, 16))
-        self.connect_button = self._primary_button(buttons, "Connect", self.connect, width=130)
-        self.connect_button.pack(side="left", padx=(0, 8))
-        self._ghost_button(buttons, "Settings…", self.open_settings, width=130).pack(side="left")
+        self.status_idle_label.pack(fill="x", padx=16, pady=10)
 
     def _build_acquisition_card(self, parent) -> None:
         card = self._card(parent)
-        card.pack(fill="x", pady=(14, 0))
+        card.pack(fill="x")
         self._card_title(card, "Record")
 
-        self.link_switch = self._switch(card, "Record PL with the run")
-        self.link_switch.pack(anchor="w", padx=16, pady=(0, 10))
+        link_row = ctk.CTkFrame(card, fg_color="transparent")
+        link_row.pack(fill="x", padx=16, pady=(0, 10))
+        self.link_switch = self._switch(link_row, "Record PL with the run")
+        self.link_switch.pack(side="left")
         if self.settings.get("pl_with_run", True):
             self.link_switch.select()
+        self._ghost_button(link_row, "Settings…", self.open_settings, width=110).pack(side="right")
 
         self.mode_toggle = SegmentedToggle(
             card, [MANUAL_MODE, AUTO_MODE], command=self._on_mode, height=32
@@ -514,15 +451,19 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self.file_name_entry = self._entry(card, self.file_name_var)
         self.file_name_entry.configure(placeholder_text="pressure")
         self.file_name_entry.pack(fill="x", padx=16)
+
+        folder_row = ctk.CTkFrame(card, fg_color="transparent")
+        folder_row.pack(fill="x", padx=16, pady=(8, 0))
         ctk.CTkLabel(
-            card,
-            text="Cycles add _run1, _run2 after the time stamp.",
-            text_color=MUTED,
-            font=ctk.CTkFont(family=HEAD_FONT, size=11),
+            folder_row,
+            textvariable=self.folder_caption,
+            text_color=TEXT,
+            font=ctk.CTkFont(family=MONO_FONT, size=11),
             anchor="w",
-            justify="left",
-            wraplength=300,
-        ).pack(fill="x", padx=16, pady=(4, 0))
+        ).pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self._ghost_button(folder_row, "Choose folder", self.choose_data_dir, width=120).pack(
+            side="right"
+        )
 
         self.cycle_box = ctk.CTkFrame(card, fg_color="transparent")
         self.cycle_switch = ctk.CTkSwitch(
@@ -552,73 +493,108 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         )
         self._ghost_button(tail_row, "Save plot", self.save_plot, width=110).pack(side="left")
 
+    def _build_connections(self, parent) -> None:
+        card = self._card(parent)
+        card.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        card.grid_columnconfigure((0, 1), weight=1, uniform="connect")
+
+        gauge = ctk.CTkFrame(card, fg_color="transparent")
+        gauge.grid(row=0, column=0, sticky="nsew", padx=(4, 8))
+        self._card_title(gauge, "Gauge")
+        saved_transport = str(self.settings.get("transport", "WiFi"))
+        if saved_transport not in ("WiFi", "Serial", "Simulated"):
+            saved_transport = "WiFi"
+        row = ctk.CTkFrame(gauge, fg_color="transparent")
+        row.pack(fill="x", padx=16)
+        self.transport = self._menu(
+            row,
+            ["WiFi", "Serial", "Simulated"],
+            saved_transport,
+            command=self._on_transport,
+        )
+        self.transport.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.connect_button = self._primary_button(row, "Connect", self.connect, width=110)
+        self.connect_button.pack(side="left")
+        ctk.CTkLabel(
+            gauge,
+            textvariable=self.link_summary_var,
+            text_color=MUTED,
+            font=ctk.CTkFont(family=MONO_FONT, size=11),
+            anchor="w",
+        ).pack(fill="x", padx=16, pady=(6, 14))
+
+        spectro = ctk.CTkFrame(card, fg_color="transparent")
+        spectro.grid(row=0, column=1, sticky="nsew", padx=(8, 4))
+        self._build_spectro_connect(spectro)
+
     def _build_curves_card(self, parent) -> None:
         card = self._card(parent)
         card.pack(fill="x", pady=(14, 0))
         self._card_title(card, "Curves")
 
-        self.runs_info_var = tk.StringVar(value="No completed runs yet")
+        ref_row = ctk.CTkFrame(card, fg_color="transparent")
+        ref_row.pack(fill="x", padx=16)
         ctk.CTkLabel(
-            card,
-            textvariable=self.runs_info_var,
+            ref_row,
+            text="Reference",
             text_color=MUTED,
-            font=ctk.CTkFont(family=HEAD_FONT, size=11),
-            anchor="w",
-        ).pack(fill="x", padx=16)
-
-        self._field_label(card, "Reference curve").pack(fill="x", padx=16, pady=(12, 2))
+            font=ctk.CTkFont(family=HEAD_FONT, size=12),
+        ).pack(side="left", padx=(0, 8))
         self.reference_menu = self._menu(
-            card, [NO_REFERENCE, LOAD_REFERENCE], NO_REFERENCE, command=self._on_reference_choice
+            ref_row, [NO_REFERENCE, LOAD_REFERENCE], NO_REFERENCE, command=self._on_reference_choice
         )
-        self.reference_menu.pack(fill="x", padx=16)
+        self.reference_menu.pack(side="left", fill="x", expand=True)
 
         actions = ctk.CTkFrame(card, fg_color="transparent")
-        actions.pack(fill="x", padx=16, pady=(12, 16))
+        actions.pack(fill="x", padx=16, pady=(8, 14))
         self._ghost_button(actions, "Compare plots…", self.open_plotter, width=140).pack(
             side="left", padx=(0, 8)
         )
         self._ghost_button(actions, "Clear stored runs", self.clear_runs, width=140).pack(side="left")
 
-    def _build_hero(self, parent) -> None:
-        hero = self._card(parent)
-        hero.grid(row=1, column=0, sticky="nsew")
-        ctk.CTkLabel(
-            hero,
-            text="Current pressure",
-            text_color=MUTED,
-            font=ctk.CTkFont(family=HEAD_FONT, size=12),
-        ).pack(anchor="w", padx=20, pady=(16, 0))
-        self.pressure_var = tk.StringVar(value="--")
-        ctk.CTkLabel(
-            hero,
-            textvariable=self.pressure_var,
-            text_color=ACCENT,
-            font=ctk.CTkFont(family=MONO_FONT, size=40, weight="bold"),
-        ).pack(anchor="w", padx=20, pady=(2, 0))
+    def _build_stats(self, parent) -> None:
+        block = ctk.CTkFrame(parent, fg_color="transparent")
+        block.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        stats = ctk.CTkFrame(block, fg_color="transparent")
+        stats.pack(fill="x")
+        self.pressure_var = self._stat_tile(stats, "Current pressure", accent=True)
+        self.pl_peak_var = self._stat_tile(stats, "PL peak", accent=True)
+        self.elapsed_var = self._stat_tile(stats, "Elapsed", accent=True)
+        self.samples_var = self._stat_tile(stats, "Samples · rate", last=True, accent=True)
+        notes = ctk.CTkFrame(block, fg_color="transparent")
+        notes.pack(fill="x", pady=(6, 0))
         self.meta_var = tk.StringVar(value="Connect to the gauge to begin")
         ctk.CTkLabel(
-            hero,
+            notes,
             textvariable=self.meta_var,
             text_color=MUTED,
-            font=ctk.CTkFont(family=HEAD_FONT, size=12),
-        ).pack(anchor="w", padx=20, pady=(4, 0))
+            font=ctk.CTkFont(family=HEAD_FONT, size=11),
+            anchor="w",
+        ).pack(side="left")
         self.error_var = tk.StringVar(value="")
         ctk.CTkLabel(
-            hero,
+            notes,
             textvariable=self.error_var,
             text_color=ERROR,
-            font=ctk.CTkFont(family=HEAD_FONT, size=12),
+            font=ctk.CTkFont(family=HEAD_FONT, size=11),
             anchor="w",
-            justify="left",
-        ).pack(fill="x", padx=20, pady=(2, 16))
-
-    def _build_stats(self, parent) -> None:
-        stats = ctk.CTkFrame(parent, fg_color="transparent")
-        stats.grid(row=2, column=0, columnspan=2, sticky="ew", pady=(14, 14))
-        self.elapsed_var = self._stat_tile(stats, "Elapsed")
-        self.samples_var = self._stat_tile(stats, "Samples · measured rate")
-        self.lowest_var = self._stat_tile(stats, "Lowest pressure")
-        self.rate_var = self._stat_tile(stats, "Pump-down rate (30 s)", last=True)
+        ).pack(side="left", padx=(12, 0))
+        self.pl_error_var = tk.StringVar(value="")
+        ctk.CTkLabel(
+            notes,
+            textvariable=self.pl_error_var,
+            text_color=ERROR,
+            font=ctk.CTkFont(family=HEAD_FONT, size=11),
+            anchor="e",
+        ).pack(side="right")
+        self.pl_meta_var = tk.StringVar(value="Connect the spectrometer to see PL")
+        ctk.CTkLabel(
+            notes,
+            textvariable=self.pl_meta_var,
+            text_color=MUTED,
+            font=ctk.CTkFont(family=HEAD_FONT, size=11),
+            anchor="e",
+        ).pack(side="right", padx=(0, 12))
 
     def _build_plot(self, parent) -> None:
         card = self._card(parent)
@@ -759,9 +735,26 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
             self.meta_var.set("Manual mode")
         self._refresh_run_button()
 
+    def _connection_status_line(self) -> str:
+        gauge = self.status_var.get().strip() if hasattr(self, "status_var") else ""
+        pl = self.pl_status_var.get().strip() if hasattr(self, "pl_status_var") else ""
+        parts = [part for part in (gauge, pl) if part]
+        return "  ·  ".join(parts) or "Ready"
+
+    def _show_connection_status(self) -> None:
+        """Connection text lives on the idle status line, not its own row."""
+        label = getattr(self, "status_idle_label", None)
+        if label is None or not hasattr(self, "activity_var"):
+            return
+        if self.activity_var.get().strip():
+            return
+        if getattr(self, "pl_activity_var", None) is not None and self.pl_activity_var.get().strip():
+            return
+        label.configure(text=self._connection_status_line(), text_color=MUTED)
+
     def _set_status(self, text: str, color: str) -> None:
         self.status_var.set(text)
-        self.dot.configure(text_color=color)
+        self._show_connection_status()
 
     def _set_activity(self, text: str | None, tone: str = "run") -> None:
         """Show a run or cycle message in the status card."""
@@ -789,14 +782,29 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self.pl_activity_label.pack_forget()
         self.status_idle_label.pack_forget()
         if not pressure and not pl_text:
-            self.status_idle_label.pack(fill="x", padx=16, pady=(0, 16))
+            self.status_idle_label.configure(text=self._connection_status_line(), text_color=MUTED)
+            self.status_idle_label.pack(fill="x", padx=16, pady=10)
             return
         self.activity_label.configure(text_color=foreground)
         self.pl_activity_label.configure(text_color=foreground)
         if pressure:
-            self.activity_label.pack(fill="x", padx=16, pady=(0, 6 if pl_text else 16))
+            self.activity_label.pack(fill="x", padx=16, pady=(10, 4 if pl_text else 10))
         if pl_text:
-            self.pl_activity_label.pack(fill="x", padx=16, pady=(0, 16))
+            self.pl_activity_label.pack(fill="x", padx=16, pady=(0, 10))
+
+    def _folder_caption(self) -> str:
+        """One-line folder path, keeping the selected folder name visible."""
+        raw = self.folder_var.get().strip()
+        path = Path(raw) if raw else self.data_dir
+        tail = path.name
+        parent = path.parent.name
+        text = f"{parent}\\{tail}" if parent else tail
+        full = str(path)
+        if text != full and text != full.replace("/", "\\"):
+            text = f"…\\{text}"
+        if len(text) <= 28:
+            return text
+        return "…" + text[-27:]
 
     def _browse_dir(self) -> str:
         return str(
@@ -1587,14 +1595,6 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         self.reference_menu.configure(values=values)
         self.reference_menu.set(current if current in values else NO_REFERENCE)
 
-        stored = len(self.runs)
-        if stored == 0:
-            info = "No completed runs yet"
-        else:
-            info = f"{stored} completed run{'s' if stored != 1 else ''} stored"
-        if self.loaded_curves:
-            info += f" · {len(self.loaded_curves)} loaded from CSV"
-        self.runs_info_var.set(info)
         self._mark_curves_dirty()
 
     def _mark_curves_dirty(self, *_args) -> None:
@@ -1728,8 +1728,6 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
             self.samples_var.set(
                 format_sample_count(len(pressures), sample_rate_hz(times))
             )
-            self.lowest_var.set(format_pressure(lowest_pressure(pressures), units))
-            self.rate_var.set(format_rate(decades_per_min(times, pressures)))
             if self.logging and path is not None:
                 progress = f"Writing {path.name}  ·  {len(pressures)} samples"
                 if self._trigger_note:
@@ -1746,8 +1744,6 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
         else:
             self.elapsed_var.set("--:--")
             self.samples_var.set("--")
-            self.lowest_var.set("--")
-            self.rate_var.set("--")
 
         self._redraw_curve()
         self.after(PLOT_REFRESH_MS, self._tick)

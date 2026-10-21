@@ -119,73 +119,45 @@ class SpectrometerPanel:
 
     # ----------------------------------------------------------- widgets
 
-    def _build_spectro_pill(self, header) -> None:
-        pill = ctk.CTkFrame(header, fg_color=FIELD, corner_radius=16)
-        pill.pack(side="right", padx=(0, 10))
-        self.pl_dot = ctk.CTkLabel(pill, text="●", text_color=MUTED, font=ctk.CTkFont(size=15), width=14)
-        self.pl_dot.pack(side="left", padx=(12, 4), pady=6)
-        self.pl_status_var = tk.StringVar(value="Spectrometer off")
-        ctk.CTkLabel(
-            pill,
-            textvariable=self.pl_status_var,
-            text_color=TEXT,
-            font=ctk.CTkFont(family=HEAD_FONT, size=12),
-        ).pack(side="left", padx=(0, 14))
-
-    def _build_spectrometer_card(self, parent) -> None:
-        card = self._card(parent)
-        card.pack(fill="x", pady=(14, 0))
-        self._card_title(card, "Spectrometer")
-
-        row = ctk.CTkFrame(card, fg_color="transparent")
+    def _build_spectro_connect(self, parent) -> None:
+        self._card_title(parent, "Spectrometer")
+        row = ctk.CTkFrame(parent, fg_color="transparent")
         row.pack(fill="x", padx=16)
         self.spectro_menu = self._menu(row, [NO_SPECTROMETER], NO_SPECTROMETER)
         self.spectro_menu.pack(side="left", fill="x", expand=True, padx=(0, 8))
         self.spectro_refresh_btn = self._ghost_button(row, "↻", self.refresh_spectrometers, width=36)
-        self.spectro_refresh_btn.pack(side="left")
-
+        self.spectro_refresh_btn.pack(side="left", padx=(0, 8))
+        self.spectro_connect_btn = self._primary_button(
+            row, "Connect", self.connect_spectrometer, width=110
+        )
+        self.spectro_connect_btn.pack(side="left")
+        self.pl_status_var = tk.StringVar(value="Spectrometer off")
         ctk.CTkLabel(
-            card,
+            parent,
             textvariable=self.spectro_info_var,
             text_color=MUTED,
             font=ctk.CTkFont(family=MONO_FONT, size=11),
             anchor="w",
             justify="left",
-        ).pack(fill="x", padx=16, pady=(8, 0))
+        ).pack(fill="x", padx=16, pady=(8, 14))
 
-        buttons = ctk.CTkFrame(card, fg_color="transparent")
-        buttons.pack(fill="x", padx=16, pady=(10, 4))
-        self.spectro_connect_btn = self._primary_button(
-            buttons, "Connect", self.connect_spectrometer, width=130
-        )
-        self.spectro_connect_btn.pack(side="left")
+    def _build_spectrometer_card(self, parent) -> None:
+        card = self._card(parent)
+        card.pack(fill="x", pady=(14, 0))
+        self._card_title(card, "PL")
 
         fields = ctk.CTkFrame(card, fg_color="transparent")
-        fields.pack(fill="x", padx=16, pady=(8, 0))
+        fields.pack(fill="x", padx=16)
         fields.grid_columnconfigure((0, 1), weight=1, uniform="pl")
-        self._field_label(fields, "Integration (ms)").grid(row=0, column=0, sticky="ew", padx=(0, 6))
-        self._field_label(fields, "Boxcar width (px)").grid(row=0, column=1, sticky="ew", padx=(6, 0))
-        self.int_entry = self._entry(fields, self.spectro_int_var)
-        self.int_entry.grid(row=1, column=0, sticky="ew", padx=(0, 6))
-        self.boxcar_entry = self._entry(fields, self.spectro_boxcar_var)
-        self.boxcar_entry.grid(row=1, column=1, sticky="ew", padx=(6, 0))
-        for entry, handler in ((self.int_entry, self._apply_integration), (self.boxcar_entry, self._apply_processing)):
-            entry.bind("<Return>", lambda _e, h=handler: h())
-            entry.bind("<FocusOut>", lambda _e, h=handler: h())
-        self._field_label(fields, "Wavelength from (nm)").grid(
-            row=2, column=0, sticky="ew", padx=(0, 6), pady=(8, 0)
-        )
-        self._field_label(fields, "to (nm)").grid(
-            row=2, column=1, sticky="ew", padx=(6, 0), pady=(8, 0)
-        )
+        self._field_label(fields, "Wavelength from (nm)").grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._field_label(fields, "to (nm)").grid(row=0, column=1, sticky="ew", padx=(6, 0))
         self.wl_min_entry = self._entry(fields, self.wl_min_var)
         self.wl_max_entry = self._entry(fields, self.wl_max_var)
-        self.wl_min_entry.grid(row=3, column=0, sticky="ew", padx=(0, 6))
-        self.wl_max_entry.grid(row=3, column=1, sticky="ew", padx=(6, 0))
+        self.wl_min_entry.grid(row=1, column=0, sticky="ew", padx=(0, 6))
+        self.wl_max_entry.grid(row=1, column=1, sticky="ew", padx=(6, 0))
         for entry in (self.wl_min_entry, self.wl_max_entry):
             entry.bind("<Return>", lambda _e: self._apply_wavelength_view())
             entry.bind("<FocusOut>", lambda _e: self._apply_wavelength_view())
-
         ctk.CTkLabel(
             card,
             text="Blank shows the full spectrum. Saved files still keep every wavelength.",
@@ -224,56 +196,17 @@ class SpectrometerPanel:
 
         record_row = ctk.CTkFrame(card, fg_color="transparent")
         record_row.pack(fill="x", padx=16, pady=(10, 16))
-        self._ghost_button(record_row, "Record PL  ·  P", self.save_spectrum, width=150).pack(
-            side="left"
-        )
+        self._ghost_button(record_row, "Record PL  ·  P", self.save_spectrum, width=150).pack(side="left")
         self.pl_series_btn = self._ghost_button(
             record_row, "Record series", self.toggle_pl_series, width=130
         )
         self.pl_series_btn.pack(side="left", padx=(8, 0))
-
         self._spectro_locked_widgets = [
-            self.int_entry,
-            self.boxcar_entry,
             self.edark_switch,
             self.subtract_switch,
             self.capture_dark_btn,
             self.clear_dark_btn,
         ]
-
-    def _build_pl_hero(self, parent) -> None:
-        hero = self._card(parent)
-        hero.grid(row=1, column=1, sticky="nsew", padx=(14, 0))
-        ctk.CTkLabel(
-            hero,
-            text="PL peak",
-            text_color=MUTED,
-            font=ctk.CTkFont(family=HEAD_FONT, size=12),
-        ).pack(anchor="w", padx=20, pady=(16, 0))
-        self.pl_peak_var = tk.StringVar(value="--")
-        ctk.CTkLabel(
-            hero,
-            textvariable=self.pl_peak_var,
-            text_color=ACCENT,
-            font=ctk.CTkFont(family=MONO_FONT, size=40, weight="bold"),
-        ).pack(anchor="w", padx=20, pady=(2, 0))
-        self.pl_meta_var = tk.StringVar(value="Connect the spectrometer to see PL")
-        ctk.CTkLabel(
-            hero,
-            textvariable=self.pl_meta_var,
-            text_color=MUTED,
-            font=ctk.CTkFont(family=HEAD_FONT, size=12),
-            anchor="w",
-        ).pack(fill="x", padx=20, pady=(4, 0))
-        self.pl_error_var = tk.StringVar(value="")
-        ctk.CTkLabel(
-            hero,
-            textvariable=self.pl_error_var,
-            text_color=ERROR,
-            font=ctk.CTkFont(family=HEAD_FONT, size=12),
-            anchor="w",
-            justify="left",
-        ).pack(fill="x", padx=20, pady=(2, 16))
 
     def _build_spectrum_plot(self, parent) -> None:
         card = self._card(parent)
@@ -328,6 +261,19 @@ class SpectrometerPanel:
         card = self._card(body)
         card.pack(fill="x", pady=(14, 0))
         self._card_title(card, "Spectrometer")
+        fields = ctk.CTkFrame(card, fg_color="transparent")
+        fields.pack(fill="x", padx=16)
+        fields.grid_columnconfigure((0, 1), weight=1, uniform="plset")
+        self._field_label(fields, "Integration (ms)").grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._field_label(fields, "Boxcar width (px)").grid(row=0, column=1, sticky="ew", padx=(6, 0))
+        int_entry = self._entry(fields, self.spectro_int_var)
+        boxcar_entry = self._entry(fields, self.spectro_boxcar_var)
+        int_entry.grid(row=1, column=0, sticky="ew", padx=(0, 6))
+        boxcar_entry.grid(row=1, column=1, sticky="ew", padx=(6, 0), pady=(0, 8))
+        int_entry.bind("<Return>", lambda _e: self._apply_integration())
+        int_entry.bind("<FocusOut>", lambda _e: self._apply_integration())
+        boxcar_entry.bind("<Return>", lambda _e: self._apply_processing())
+        boxcar_entry.bind("<FocusOut>", lambda _e: self._apply_processing())
         self._field_label(card, "Scans to average").pack(fill="x", padx=16, pady=(0, 2))
         self._entry(card, self.spectro_scans_var).pack(fill="x", padx=16)
         ctk.CTkCheckBox(
@@ -363,7 +309,9 @@ class SpectrometerPanel:
 
     def _set_pl_status(self, text: str, color: str) -> None:
         self.pl_status_var.set(text)
-        self.pl_dot.configure(text_color=color)
+        show = getattr(self, "_show_connection_status", None)
+        if show is not None:
+            show()
 
     def _refresh_pl_status(self) -> None:
         sc = self.spectro
@@ -529,10 +477,9 @@ class SpectrometerPanel:
         self.spectro_int_var.set(f"{sc.integration_us / 1000:g}")
         self._apply_processing()
         dev = sc.device
-        lo, hi = dev.integration_limits_us
         self.spectro_info_var.set(
-            f"{dev.model} · S/N {dev.serial}\n"
-            f"{dev.wavelengths[0]:.0f}–{dev.wavelengths[-1]:.0f} nm · {lo / 1000:g}–{hi / 1000:g} ms"
+            f"{dev.model} · S/N {dev.serial} · "
+            f"{dev.wavelengths[0]:.0f}–{dev.wavelengths[-1]:.0f} nm"
         )
         if not dev.supports_electric_dark:
             self.edark_switch.deselect()
@@ -627,7 +574,11 @@ class SpectrometerPanel:
         if sc.recording:
             self.spectro_scans_var.set(str(sc.scans))
             self.nonlin_var.set(sc.nonlinearity)
+            self.spectro_int_var.set(f"{sc.integration_us / 1000:g}")
+            self.spectro_boxcar_var.set(str(sc.boxcar_width))
             return
+        self._apply_integration()
+        self._apply_processing()
         sc.set_scans(self._read_int(self.spectro_scans_var, sc.scans, minimum=1))
         self._apply_corrections()
 
