@@ -547,7 +547,7 @@ class MonitorApp(SpectrometerPanel, ctk.CTk):
 
         actions = ctk.CTkFrame(card, fg_color="transparent")
         actions.pack(fill="x", padx=16, pady=(8, 14))
-        self._ghost_button(actions, "Compare plots…", self.open_plotter, width=140).pack(
+        self._ghost_button(actions, "Plot runs…", self.open_plotter, width=140).pack(
             side="left", padx=(0, 8)
         )
         self._ghost_button(actions, "Clear stored runs", self.clear_runs, width=140).pack(side="left")
