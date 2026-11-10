@@ -57,7 +57,19 @@ def _time_ticks(t_min: float, t_max: float) -> np.ndarray:
     return np.arange(start, t_max + 1e-9, step)
 
 
-def _plot_image(series: PlSeries, ax, *, t_min, t_max, w_min, w_max, min_peak_intensity):
+def _plot_image(
+    series: PlSeries,
+    ax,
+    *,
+    t_min,
+    t_max,
+    w_min,
+    w_max,
+    min_peak_intensity,
+    x_major=5.0,
+    show_peak=True,
+    show_onset=True,
+):
     """Colormap with the pressure curve and the peak-wavelength trace."""
     wavelengths = np.asarray(series.wavelengths, dtype=float)
     time = np.asarray(series.elapsed_s, dtype=float)
@@ -110,8 +122,8 @@ def _plot_image(series: PlSeries, ax, *, t_min, t_max, w_min, w_max, min_peak_in
     ax.yaxis.set_major_locator(MultipleLocator(50))
     ax.yaxis.set_minor_locator(MultipleLocator(10))
     ax.set_xlabel("Time (s)")
-    ax.xaxis.set_major_locator(MultipleLocator(5))
-    ax.xaxis.set_minor_locator(MultipleLocator(1))
+    ax.xaxis.set_major_locator(MultipleLocator(x_major))
+    ax.xaxis.set_minor_locator(MultipleLocator(1 if x_major >= 1 else x_major / 5))
     ax.set_xlim(t_min, t_max)
 
     intensity_roi = intensities[in_time][:, in_wave]
@@ -122,33 +134,38 @@ def _plot_image(series: PlSeries, ax, *, t_min, t_max, w_min, w_max, min_peak_in
         wavelengths_roi[index_max_intensity],
         wavelengths_roi[0],
     )
-    peak_line, = ax.plot(time_roi, peak_wavelengths, color="white", lw=1.4, zorder=4)
+    handles = []
+    labels = []
+    if show_peak:
+        peak_line, = ax.plot(time_roi, peak_wavelengths, color="white", lw=1.4, zorder=4)
+        handles.append(peak_line)
+        labels.append("Max intensity")
 
     onset_s = np.nan
     if len(peak_wavelengths) > 1:
         change_at = int(np.argmax(np.diff(peak_wavelengths))) + 1
         onset_s = float(time_roi[change_at])
-        ax.plot(
-            time_roi[change_at],
-            peak_wavelengths[change_at],
-            marker="o",
-            color="white",
-            markeredgecolor="black",
-            zorder=5,
-        )
-        ax.text(
-            time_roi[change_at] + 1,
-            peak_wavelengths[change_at],
-            f"{onset_s:.2f} s",
-            color="white",
-            size=8,
-        )
-
-    handles = [peak_line]
-    labels = ["Peak position"]
+        if show_onset:
+            ax.plot(
+                time_roi[change_at],
+                peak_wavelengths[change_at],
+                marker="o",
+                color="white",
+                markeredgecolor="black",
+                zorder=5,
+            )
+            ax.text(
+                time_roi[change_at] + 1,
+                peak_wavelengths[change_at],
+                f"{onset_s:.2f} s",
+                color="white",
+                size=8,
+            )
     if pressure_line is not None:
         handles.append(pressure_line)
         labels.append("Pump-down pressure")
+    if not handles:
+        return im, onset_s
     ax.legend(
         handles,
         labels,
@@ -161,7 +178,18 @@ def _plot_image(series: PlSeries, ax, *, t_min, t_max, w_min, w_max, min_peak_in
     return im, onset_s
 
 
-def _plot_spectra(series: PlSeries, ax, *, t_min, t_max, w_min, w_max, min_peak_intensity):
+def _plot_spectra(
+    series: PlSeries,
+    ax,
+    *,
+    t_min,
+    t_max,
+    w_min,
+    w_max,
+    min_peak_intensity,
+    peak_text_dx=50.0,
+    peak_text_dy=0.0,
+):
     """Every spectrum in the window, colored by time."""
     wavelengths = np.asarray(series.wavelengths, dtype=float)
     time = np.asarray(series.elapsed_s, dtype=float)
@@ -185,8 +213,8 @@ def _plot_spectra(series: PlSeries, ax, *, t_min, t_max, w_min, w_max, min_peak_
     if float(last[peak]) > min_peak_intensity:
         last_peak_nm = float(waves[peak])
         ax.text(
-            waves[peak] + 50,
-            last[peak],
+            waves[peak] + peak_text_dx,
+            last[peak] + peak_text_dy,
             f"{last_peak_nm:.1f} nm",
             color="brown",
             ha="center",
@@ -205,20 +233,28 @@ def _plot_spectra(series: PlSeries, ax, *, t_min, t_max, w_min, w_max, min_peak_
     return plt.cm.ScalarMappable(norm=norm, cmap=cmap), last_peak_nm
 
 
-def _plot_summary(ax, labels, onset_times, last_peaks) -> None:
+def _plot_summary(ax, labels, onset_times, last_peaks, *, show_onset=True) -> None:
     x = np.arange(len(labels))
-    time_line, = ax.plot(x, onset_times, marker="o", color="#1d4e89", lw=1.6)
-    ax.set_ylabel("Onset time (s)")
     ax.set_xlabel("Run")
     ax.set_xticks(x)
     ax.set_xticklabels(labels, rotation=40, ha="right")
-
-    ax_wave = ax.twinx()
+    handles = []
+    legend_labels = []
+    if show_onset:
+        time_line, = ax.plot(x, onset_times, marker="o", color="#1d4e89", lw=1.6)
+        ax.set_ylabel("Onset time (s)")
+        handles.append(time_line)
+        legend_labels.append("PL onset")
+        ax_wave = ax.twinx()
+    else:
+        ax_wave = ax
     wave_line, = ax_wave.plot(x, last_peaks, marker="s", color="#9a3412", lw=1.6)
     ax_wave.set_ylabel("Last spectrum peak (nm)")
+    handles.append(wave_line)
+    legend_labels.append("Last spectrum peak")
     ax.legend(
-        [time_line, wave_line],
-        ["Onset time", "Last spectrum peak"],
+        handles,
+        legend_labels,
         loc="best",
         edgecolor="none",
         facecolor="none",
@@ -235,6 +271,11 @@ def render_run_pair(
     w_min: float,
     w_max: float,
     min_peak_intensity: float = 100.0,
+    x_major: float = 5.0,
+    show_peak: bool = True,
+    show_onset: bool = True,
+    peak_text_dx: float = 50.0,
+    peak_text_dy: float = 0.0,
 ) -> tuple[float, float]:
     """One figure: colormap and pressure on the left, spectra on the right."""
     fig.clear()
@@ -249,6 +290,9 @@ def render_run_pair(
         w_min=w_min,
         w_max=w_max,
         min_peak_intensity=min_peak_intensity,
+        x_major=x_major,
+        show_peak=show_peak,
+        show_onset=show_onset,
     )
     spectra, last_peak = _plot_spectra(
         series,
@@ -258,6 +302,8 @@ def render_run_pair(
         w_min=w_min,
         w_max=w_max,
         min_peak_intensity=min_peak_intensity,
+        peak_text_dx=peak_text_dx,
+        peak_text_dy=peak_text_dy,
     )
     ax_image.set_title(title, loc="left", fontsize=10)
     if image is not None:
@@ -267,11 +313,17 @@ def render_run_pair(
     return float(onset_s), float(last_peak)
 
 
-def render_run_summary(fig, labels, onset_times, last_peaks) -> None:
+def render_run_summary(fig, labels, onset_times, last_peaks, *, show_onset: bool = True) -> None:
     """Onset time and the last spectrum peak against run number."""
     fig.clear()
     fig.set_layout_engine("constrained")
-    _plot_summary(fig.add_subplot(111), labels, onset_times, last_peaks)
+    _plot_summary(
+        fig.add_subplot(111),
+        labels,
+        onset_times,
+        last_peaks,
+        show_onset=show_onset,
+    )
 
 
 def resolve_limits(items, t_min, t_max, w_min, w_max):
@@ -288,6 +340,11 @@ def render_run_gallery(
     w_min: float | None = None,
     w_max: float | None = None,
     min_peak_intensity: float = 100.0,
+    x_major: float = 5.0,
+    show_peak: bool = True,
+    show_onset: bool = True,
+    peak_text_dx: float = 50.0,
+    peak_text_dy: float = 0.0,
 ) -> None:
     """Draw one notebook-style row per series, then the onset summary."""
     fig.clear()
@@ -328,6 +385,9 @@ def render_run_gallery(
             w_min=w_min,
             w_max=w_max,
             min_peak_intensity=min_peak_intensity,
+            x_major=x_major,
+            show_peak=show_peak,
+            show_onset=show_onset,
         )
         spectra, last_peak = _plot_spectra(
             series,
@@ -337,6 +397,8 @@ def render_run_gallery(
             w_min=w_min,
             w_max=w_max,
             min_peak_intensity=min_peak_intensity,
+            peak_text_dx=peak_text_dx,
+            peak_text_dy=peak_text_dy,
         )
         title = f"Run {number}" if number is not None and counts.get(number) == 1 else label
         ax_image.set_title(title, loc="left", fontsize=10)
@@ -353,4 +415,10 @@ def render_run_gallery(
         last_peaks.append(last_peak)
         tick_labels.append(title)
 
-    _plot_summary(fig.add_subplot(grid[-1, :]), tick_labels, onset_times, last_peaks)
+    _plot_summary(
+        fig.add_subplot(grid[-1, :]),
+        tick_labels,
+        onset_times,
+        last_peaks,
+        show_onset=show_onset,
+    )

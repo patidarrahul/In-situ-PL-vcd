@@ -93,6 +93,28 @@ class TestRunGallery(unittest.TestCase):
         self.assertEqual(len([ax for ax in fig.axes if ax.images]), 1)
         self.assertEqual(fig.axes[0].get_title(loc="left"), "Run 2")
 
+    def test_peak_and_onset_can_be_hidden(self):
+        series = _series(
+            "batch_run2.npz",
+            [[40, 0, 0, 0], [0, 0, 250, 0], [0, 0, 0, 400]],
+            [0.0, 5.0, 10.0],
+        )
+        fig = Figure()
+        render_run_pair(
+            fig,
+            "Run 2",
+            series,
+            t_min=0,
+            t_max=10,
+            w_min=500,
+            w_max=800,
+            show_peak=False,
+            show_onset=False,
+        )
+        image = next(ax for ax in fig.axes if ax.images)
+        self.assertEqual(len(image.get_lines()), 0)
+        self.assertEqual(len(image.texts), 0)
+
     def test_empty_gallery_asks_for_files(self):
         fig = Figure()
         render_run_gallery(fig, [])
